@@ -36,6 +36,9 @@ class Database:
                 )
             ''')
 
+            # Migrate existing database: Add vehicle columns if they don't exist
+            await self._migrate_add_vehicle_columns(db)
+
             # Create index on timestamp for faster queries
             await db.execute('''
                 CREATE INDEX IF NOT EXISTS idx_timestamp
@@ -49,6 +52,37 @@ class Database:
             ''')
 
             await db.commit()
+
+    async def _migrate_add_vehicle_columns(self, db):
+        """Add vehicle recognition columns to existing database if needed."""
+        try:
+            # Check if vehicle_color column exists
+            cursor = await db.execute("PRAGMA table_info(events)")
+            columns = await cursor.fetchall()
+            column_names = [col[1] for col in columns]
+            
+            # Add missing columns
+            if 'vehicle_color' not in column_names:
+                logger.info("Adding vehicle_color column to database...")
+                await db.execute('ALTER TABLE events ADD COLUMN vehicle_color TEXT')
+            
+            if 'vehicle_make' not in column_names:
+                logger.info("Adding vehicle_make column to database...")
+                await db.execute('ALTER TABLE events ADD COLUMN vehicle_make TEXT')
+            
+            if 'vehicle_model' not in column_names:
+                logger.info("Adding vehicle_model column to database...")
+                await db.execute('ALTER TABLE events ADD COLUMN vehicle_model TEXT')
+            
+            if 'vehicle_confidence' not in column_names:
+                logger.info("Adding vehicle_confidence column to database...")
+                await db.execute('ALTER TABLE events ADD COLUMN vehicle_confidence REAL')
+            
+            await db.commit()
+            logger.info("Database migration completed successfully")
+            
+        except Exception as e:
+            logger.error(f"Error during database migration: {e}")
 
     async def add_event(self, event_data: Dict) -> int:
         """Add a new ANPR event to database with deduplication."""
