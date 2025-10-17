@@ -15,17 +15,19 @@ Red | Toyota | Sedan
 ```
 
 **Images:**
-- **Vehicle Photo** - Full vehicle image with the above text as caption
+- **Cropped Vehicle** - Isolated vehicle image (YOLOv9 detected and cropped)
 - **Plate Crop** - Cropped license plate image (sent as media group/album)
+
+**Multi-Vehicle:** Each vehicle receives separate notification with individual crop.
 
 #### Without License Plate (Vehicle-Only)
 ```
-Vehicle Detected (No Plate)
+🚗 Vehicle Detected (No Plate)
 Blue | Honda | SUV
 ```
 
 **Images:**
-- **Vehicle Photo** - Full vehicle image with the above text as caption
+- **Cropped Vehicle** - Isolated vehicle image (YOLOv9 detected and cropped)
 - **No plate crop** (since no plate was detected)
 
 ### Home Assistant Webhook
@@ -250,15 +252,21 @@ The Telegram messages use emojis for better readability:
 ### Media Group (Album) Feature
 
 When a license plate is detected, Telegram receives **two images as an album**:
-1. **Full vehicle image** with detection details as caption
+1. **Cropped vehicle image** (YOLOv9 detected and isolated) with detection details as caption
 2. **Cropped plate image** for easy reading
 
 This makes it easier to:
 - Read the plate number clearly
-- See the full vehicle context
+- See the vehicle clearly without background clutter
+- More accurate color detection (using isolated vehicle)
 - Archive both views for records
 
-**Note:** Vehicle-only detections (no plate) will only send the full vehicle image.
+**Multi-Vehicle Detections:**
+- Each vehicle gets its own notification
+- Each notification includes that vehicle's crop + plate crop
+- Example: "ABC123 (Vehicle 1/3)", "ABC123 (Vehicle 2/3)", etc.
+
+**Note:** Vehicle-only detections (no plate) will only send the cropped vehicle image.
 
 Example notification:
 ![Telegram Notification Example](screenshots/telegram_notification.png)

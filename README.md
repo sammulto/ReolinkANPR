@@ -105,12 +105,14 @@ Plate: ABC123          Vehicle: Red | Toyota | Sedan
 🚗 Plate Detected: ABC123
 📊 Confidence: 95.2%
 Red | Toyota | Sedan
-[Album: Vehicle Photo + Plate Crop]
+[Album: Cropped Vehicle + Plate Crop]
 ```
 
 **Note:** Telegram receives two images when a plate is detected:
-- Full vehicle image with detection details
-- Cropped license plate for easy reading
+- **Cropped vehicle image** (isolated vehicle for clarity)
+- **Cropped license plate** (zoomed plate for easy reading)
+
+**Multi-vehicle scenarios:** Each vehicle gets a separate notification with its own crop!
 
 **See [VEHICLE_RECOGNITION.md](VEHICLE_RECOGNITION.md) for complete documentation.**
 

@@ -320,17 +320,23 @@ class ANPRService:
                                 result.get('confidence', 0.0),
                                 image_path,
                                 plate_crop_path,
+                                vehicle_crop_path,  # Pass vehicle crop path
                                 vehicle.get('color'),
                                 vehicle.get('make'),
                                 vehicle.get('model')
                             )
                     else:
                         # Fallback: send single notification with primary vehicle data
+                        vehicle_crop_path = result.get('vehicle_crop_path')
+                        if vehicle_crop_path:
+                            vehicle_crop_path = str(save_dir / vehicle_crop_path)
+                        
                         await self.notifier.send_detection(
                             result['plate_number'],
                             result.get('confidence', 0.0),
                             image_path,
                             plate_crop_path,
+                            vehicle_crop_path,  # Pass vehicle crop path
                             result.get('vehicle_color'),
                             result.get('vehicle_make'),
                             result.get('vehicle_model')
