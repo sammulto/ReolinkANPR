@@ -152,10 +152,10 @@ class Notifier:
         """Send message to Telegram with vehicle crop, full frame, and optional plate crop (3-image album)."""
         try:
             async with aiohttp.ClientSession() as session:
-                # Check which images exist
-                has_vehicle_crop = vehicle_crop_path and Path(vehicle_crop_path).exists()
-                has_full_image = full_image_path and Path(full_image_path).exists()
-                has_plate_crop = plate_crop_path and Path(plate_crop_path).exists()
+                # Check which images exist (handle None values properly)
+                has_vehicle_crop = bool(vehicle_crop_path and Path(vehicle_crop_path).exists())
+                has_full_image = bool(full_image_path and Path(full_image_path).exists())
+                has_plate_crop = bool(plate_crop_path and Path(plate_crop_path).exists())
                 
                 # Count available images
                 image_count = int(has_vehicle_crop) + int(has_full_image) + int(has_plate_crop)
