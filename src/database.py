@@ -23,8 +23,8 @@ class Database:
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    plate_number TEXT NOT NULL,
-                    confidence REAL NOT NULL,
+                    plate_number TEXT,
+                    confidence REAL,
                     image_path TEXT,
                     plate_crop_path TEXT,
                     box_coordinates TEXT,
@@ -56,12 +56,26 @@ class Database:
             plate_number = event_data.get('plate_number')
             
             # Check for duplicate within last 30 seconds
-            cursor = await db.execute('''
-                SELECT id, timestamp FROM events
-                WHERE plate_number = ?
-                ORDER BY timestamp DESC
-                LIMIT 1
-            ''', (plate_number,))
+            if plate_number and plate_number != 'NO_PLATE':
+                # Plate-based deduplication
+                cursor = await db.execute('''
+                    SELECT id, timestamp FROM events
+                    WHERE plate_number = ?
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                ''', (plate_number,))
+            else:
+                # Vehicle-only deduplication (by color and make)
+                vehicle_color = event_data.get('vehicle_color', 'unknown')
+                vehicle_make = event_data.get('vehicle_make', 'unknown')
+                cursor = await db.execute('''
+                    SELECT id, timestamp FROM events
+                    WHERE plate_number = 'NO_PLATE'
+                    AND vehicle_color = ?
+                    AND vehicle_make = ?
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                ''', (vehicle_color, vehicle_make))
             
             last_event = await cursor.fetchone()
             
@@ -71,7 +85,10 @@ class Database:
                 time_diff = (datetime.now() - last_time).total_seconds()
                 
                 if time_diff < 30:
-                    logger.info(f"Duplicate plate {plate_number} detected within 30s - skipping")
+                    if plate_number and plate_number != 'NO_PLATE':
+                        logger.info(f"Duplicate plate {plate_number} detected within 30s - skipping")
+                    else:
+                        logger.info(f"Duplicate vehicle ({event_data.get('vehicle_color')} {event_data.get('vehicle_make')}) detected within 30s - skipping")
                     return last_event[0]  # Return existing event ID
             
             # No duplicate found - insert new event

@@ -184,9 +184,9 @@
                                         '<span class="text-muted">-</span>'}
                                 </td>
                                 <td>
-                                    ${event.plate_number ? 
+                                    ${event.plate_number && event.plate_number !== 'NO_PLATE' ? 
                                         `<span class="badge bg-primary fs-6">${event.plate_number}</span>` : 
-                                        '<span class="text-muted">No plate</span>'}
+                                        '<span class="badge bg-warning text-dark fs-6">No Plate</span>'}
                                 </td>
                                 <td>
                                     ${formatVehicleInfo(event)}

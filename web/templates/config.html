@@ -146,6 +146,17 @@
                                         Analyzes vehicle images to detect color, make, and model. Requires PyTorch to be installed.
                                     </small>
                                 </div>
+                                <div class="col-md-12 mb-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="vehicle_only_detection_enabled">
+                                        <label class="form-check-label" for="vehicle_only_detection_enabled">
+                                            <strong>Track Vehicles Without Plates</strong>
+                                        </label>
+                                    </div>
+                                    <small class="text-muted d-block mt-2">
+                                        Save vehicle info even when no license plate is detected. Useful for tracking all vehicles passing by.
+                                    </small>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -524,6 +535,7 @@
             document.getElementById('ocr_model').value = config.alpr?.ocr_model || 'cct-s-v1-global-model';
             document.getElementById('min_confidence').value = config.alpr?.min_confidence || 0.9;
             document.getElementById('vehicle_recognition_enabled').checked = config.alpr?.vehicle_recognition_enabled !== false;
+            document.getElementById('vehicle_only_detection_enabled').checked = config.alpr?.vehicle_only_detection_enabled !== false;
 
             // System settings
             document.getElementById('log_level').value = config.system?.log_level || 'INFO';
@@ -707,7 +719,8 @@
                 detection_model: document.getElementById('detection_model').value,
                 ocr_model: document.getElementById('ocr_model').value,
                 min_confidence: parseFloat(document.getElementById('min_confidence').value),
-                vehicle_recognition_enabled: document.getElementById('vehicle_recognition_enabled').checked
+                vehicle_recognition_enabled: document.getElementById('vehicle_recognition_enabled').checked,
+                vehicle_only_detection_enabled: document.getElementById('vehicle_only_detection_enabled').checked
             },
             system: {
                 log_level: document.getElementById('log_level').value,

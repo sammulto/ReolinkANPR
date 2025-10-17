@@ -27,7 +27,8 @@ class Config:
                 'detection_model': 'yolo-v9-t-640-license-plate-end2end',
                 'ocr_model': 'cct-s-v1-global-model',
                 'min_confidence': 0.9,
-                'vehicle_recognition_enabled': True
+                'vehicle_recognition_enabled': True,
+                'vehicle_only_detection_enabled': True
             },
             'system': {
                 'log_level': 'INFO',
@@ -104,6 +105,11 @@ class Config:
     @property
     def vehicle_recognition_enabled(self) -> bool:
         return self.get('alpr', 'vehicle_recognition_enabled') or True
+
+    @property
+    def vehicle_only_detection_enabled(self) -> bool:
+        """Enable vehicle detection even when no plate is found."""
+        return self.get('alpr', 'vehicle_only_detection_enabled') or True
 
     # System settings
     @property

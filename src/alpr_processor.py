@@ -141,12 +141,20 @@ class ALPRProcessor:
                 logger.error(f"Error processing frame {i+1}: {e}")
                 continue
 
-        # If no detections found, save debug frames
+        # If no plate detected, still try vehicle recognition
         if not best_result:
-            logger.info("No valid plates detected - saving first and last frames for debugging")
-            self._save_debug_frames(frame_bytes_list, save_dir)
+            logger.info("No valid plates detected")
+            
+            # Still perform vehicle recognition on the best quality frame
+            if self.vehicle_recognizer and self.vehicle_recognizer.enabled and self.config.vehicle_only_detection_enabled:
+                return self._process_vehicle_only(frame_bytes_list, save_dir)
+            else:
+                # Save debug frames if vehicle recognition is disabled
+                logger.info("Saving debug frames")
+                self._save_debug_frames(frame_bytes_list, save_dir)
+                return None
 
-        # Return best result if found
+        # Return best result if plate found
         if best_result and best_image is not None:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -194,6 +202,71 @@ class ALPRProcessor:
 
         logger.info("No valid plates detected in any frame")
         return None
+
+    def _process_vehicle_only(self, frame_bytes_list: List[bytes], save_dir: Path) -> Optional[Dict]:
+        """
+        Process vehicle recognition when no plate is detected.
+        
+        Args:
+            frame_bytes_list: List of frame bytes to process
+            save_dir: Directory to save images
+            
+        Returns:
+            Dict with vehicle info but no plate data, or None if processing fails
+        """
+        try:
+            logger.info("No plate detected - performing vehicle-only recognition...")
+            
+            # Select the middle frame (usually best quality)
+            if not frame_bytes_list:
+                return None
+            
+            mid_idx = len(frame_bytes_list) // 2
+            frame_bytes = frame_bytes_list[mid_idx]
+            
+            # Decode image
+            image_array = np.frombuffer(frame_bytes, np.uint8)
+            img = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+            
+            if img is None:
+                logger.warning("Failed to decode frame for vehicle-only processing")
+                return None
+            
+            # Recognize vehicle attributes
+            vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(img)
+            
+            if vehicle_attrs['color'] == 'unknown' and vehicle_attrs['make'] == 'unknown':
+                logger.info("No vehicle attributes detected")
+                self._save_debug_frames(frame_bytes_list, save_dir)
+                return None
+            
+            logger.info(f"Vehicle detected (no plate): {vehicle_attrs['color']} {vehicle_attrs['make']} {vehicle_attrs['model']}")
+            
+            # Save full image with vehicle-only naming
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            vehicle_desc = f"{vehicle_attrs['color']}_{vehicle_attrs['make']}"
+            image_filename = f"{timestamp}_NO_PLATE_{vehicle_desc}.jpg"
+            image_path = save_dir / "images" / image_filename
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(image_path), img)
+            
+            return {
+                'plate_number': 'NO_PLATE',
+                'confidence': 0.0,
+                'image_path': f"images/{image_filename}",
+                'plate_crop_path': None,
+                'box_coordinates': {},
+                'frame_count': len(frame_bytes_list),
+                'vehicle_color': vehicle_attrs['color'],
+                'vehicle_make': vehicle_attrs['make'],
+                'vehicle_model': vehicle_attrs['model'],
+                'vehicle_confidence': vehicle_attrs['confidence']
+            }
+            
+        except Exception as e:
+            logger.error(f"Error during vehicle-only processing: {e}")
+            self._save_debug_frames(frame_bytes_list, save_dir)
+            return None
 
     def _save_debug_frames(self, frame_bytes_list: List[bytes], save_dir: Path):
         """Save first and last frames for debugging when no plates detected."""
