@@ -95,13 +95,13 @@ class Notifier:
         parts = []
         
         if color and color != 'unknown':
-            parts.append(f"🎨 {color.capitalize()}")
+            parts.append(f"{color.capitalize()}")
         
         if make and make != 'unknown':
-            parts.append(f"🏭 {make.capitalize()}")
+            parts.append(f"{make.capitalize()}")
         
         if model and model != 'unknown':
-            parts.append(f"🚙 {model.capitalize()}")
+            parts.append(f"{model.capitalize()}")
         
         return " | ".join(parts) if parts else ""
 
