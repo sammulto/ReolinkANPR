@@ -129,7 +129,12 @@
                                 <div class="col-md-6 mb-3">
                                     <label for="min_confidence" class="form-label">Minimum Confidence</label>
                                     <input type="number" class="form-control" id="min_confidence" min="0" max="1" step="0.01" required>
-                                    <small class="text-muted">Minimum confidence threshold (0.0 - 1.0)</small>
+                                    <small class="text-muted">Minimum confidence threshold for plate detection (0.0 - 1.0)</small>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label for="vehicle_min_confidence" class="form-label">Vehicle Detection Confidence</label>
+                                    <input type="number" class="form-control" id="vehicle_min_confidence" min="0" max="1" step="0.01" required>
+                                    <small class="text-muted">Minimum confidence threshold for vehicle detection (0.0 - 1.0)</small>
                                 </div>
                             </div>
                             
@@ -534,6 +539,7 @@
             document.getElementById('detection_model').value = config.alpr?.detection_model || 'yolo-v9-t-640-license-plate-end2end';
             document.getElementById('ocr_model').value = config.alpr?.ocr_model || 'cct-s-v1-global-model';
             document.getElementById('min_confidence').value = config.alpr?.min_confidence || 0.9;
+            document.getElementById('vehicle_min_confidence').value = config.alpr?.vehicle_min_confidence || 0.3;
             document.getElementById('vehicle_recognition_enabled').checked = config.alpr?.vehicle_recognition_enabled !== false;
             document.getElementById('vehicle_only_detection_enabled').checked = config.alpr?.vehicle_only_detection_enabled !== false;
 
@@ -719,6 +725,7 @@
                 detection_model: document.getElementById('detection_model').value,
                 ocr_model: document.getElementById('ocr_model').value,
                 min_confidence: parseFloat(document.getElementById('min_confidence').value),
+                vehicle_min_confidence: parseFloat(document.getElementById('vehicle_min_confidence').value),
                 vehicle_recognition_enabled: document.getElementById('vehicle_recognition_enabled').checked,
                 vehicle_only_detection_enabled: document.getElementById('vehicle_only_detection_enabled').checked
             },

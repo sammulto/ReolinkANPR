@@ -119,7 +119,9 @@ class VehicleRecognizer:
                         cls = int(box.cls[0])
                         if cls in vehicle_classes:
                             conf = float(box.conf[0])
-                            if conf > 0.3:  # Confidence threshold
+                            # Use configurable confidence threshold
+                            min_conf = self.config.vehicle_min_confidence if self.config else 0.3
+                            if conf > min_conf:
                                 x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                                 vehicles.append((x1, y1, x2, y2, conf))
                 

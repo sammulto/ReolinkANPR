@@ -27,6 +27,7 @@ class Config:
                 'detection_model': 'yolo-v9-t-640-license-plate-end2end',
                 'ocr_model': 'cct-s-v1-global-model',
                 'min_confidence': 0.9,
+                'vehicle_min_confidence': 0.3,
                 'vehicle_recognition_enabled': True,
                 'vehicle_only_detection_enabled': True
             },
@@ -101,6 +102,10 @@ class Config:
     @property
     def min_confidence(self) -> float:
         return self.get('alpr', 'min_confidence') or 0.9
+
+    @property
+    def vehicle_min_confidence(self) -> float:
+        return self.get('alpr', 'vehicle_min_confidence') or 0.3
 
     @property
     def vehicle_recognition_enabled(self) -> bool:
