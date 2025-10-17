@@ -298,15 +298,43 @@ class ANPRService:
                     if plate_crop_path:
                         plate_crop_path = str(save_dir / plate_crop_path)
                     
-                    await self.notifier.send_detection(
-                        result['plate_number'],
-                        result.get('confidence', 0.0),
-                        image_path,
-                        plate_crop_path,
-                        result.get('vehicle_color'),
-                        result.get('vehicle_make'),
-                        result.get('vehicle_model')
-                    )
+                    # Send notifications for ALL detected vehicles
+                    vehicles = result.get('vehicles', [])
+                    
+                    if vehicles:
+                        logger.info(f"Sending notifications for {len(vehicles)} vehicle(s)")
+                        
+                        for idx, vehicle in enumerate(vehicles, 1):
+                            # Convert vehicle crop path to absolute
+                            vehicle_crop_path = vehicle.get('crop_path')
+                            if vehicle_crop_path:
+                                vehicle_crop_path = str(save_dir / vehicle_crop_path)
+                            
+                            # For multiple vehicles, add vehicle number to plate
+                            plate_display = result['plate_number']
+                            if len(vehicles) > 1:
+                                plate_display = f"{result['plate_number']} (Vehicle {idx}/{len(vehicles)})"
+                            
+                            await self.notifier.send_detection(
+                                plate_display,
+                                result.get('confidence', 0.0),
+                                image_path,
+                                plate_crop_path,
+                                vehicle.get('color'),
+                                vehicle.get('make'),
+                                vehicle.get('model')
+                            )
+                    else:
+                        # Fallback: send single notification with primary vehicle data
+                        await self.notifier.send_detection(
+                            result['plate_number'],
+                            result.get('confidence', 0.0),
+                            image_path,
+                            plate_crop_path,
+                            result.get('vehicle_color'),
+                            result.get('vehicle_make'),
+                            result.get('vehicle_model')
+                        )
             else:
                 logger.info("No valid plates found in frames")
 

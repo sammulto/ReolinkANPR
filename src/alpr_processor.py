@@ -36,8 +36,7 @@ class ALPRProcessor:
         # Initialize vehicle recognizer
         try:
             if config.vehicle_recognition_enabled:
-                # Pass the ALPR detector to vehicle recognizer for potential reuse
-                self.vehicle_recognizer = VehicleRecognizer(config, alpr_detector=self.alpr.detector)
+                self.vehicle_recognizer = VehicleRecognizer(config)
                 if self.vehicle_recognizer.enabled:
                     logger.info("Vehicle recognition enabled")
                 else:
@@ -173,41 +172,82 @@ class ALPRProcessor:
 
             bbox = best_result.detection.bounding_box
 
-            # Recognize vehicle attributes (color, make, model)
-            vehicle_attrs = {'color': 'unknown', 'make': 'unknown', 'model': 'unknown', 'confidence': 0.0}
-            vehicle_crop_filename = None
+            # Recognize vehicle attributes (color, make, model) for ALL detected vehicles
+            vehicles_data = []
             
             if self.vehicle_recognizer and self.vehicle_recognizer.enabled:
                 try:
-                    logger.info("Recognizing vehicle attributes...")
+                    logger.info("Detecting and recognizing all vehicles...")
                     
-                    # Get vehicle crop first
-                    vehicle_crop, vehicle_bbox = self.vehicle_recognizer.get_primary_vehicle_crop(best_image)
+                    # Get all vehicle crops
+                    vehicle_crops = self.vehicle_recognizer.get_all_vehicle_crops(best_image)
                     
-                    if vehicle_crop is not None:
-                        # Save vehicle crop
-                        vehicle_crop_filename = f"{timestamp}_{best_result.ocr.text.upper().replace(' ', '')}_vehicle.jpg"
-                        vehicle_crop_path = save_dir / "images" / vehicle_crop_filename
-                        cv2.imwrite(str(vehicle_crop_path), vehicle_crop)
-                        logger.info(f"Saved vehicle crop: {vehicle_crop_filename}")
-                        
-                        # Recognize attributes from the cropped vehicle
-                        vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(vehicle_crop)
+                    if vehicle_crops:
+                        for idx, (vehicle_crop, vehicle_bbox, conf) in enumerate(vehicle_crops, 1):
+                            # Save vehicle crop
+                            vehicle_crop_filename = f"{timestamp}_{best_result.ocr.text.upper().replace(' ', '')}_vehicle_{idx}.jpg"
+                            vehicle_crop_path = save_dir / "images" / vehicle_crop_filename
+                            cv2.imwrite(str(vehicle_crop_path), vehicle_crop)
+                            logger.info(f"Saved vehicle crop {idx}: {vehicle_crop_filename}")
+                            
+                            # Recognize attributes from the cropped vehicle
+                            vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(vehicle_crop)
+                            
+                            vehicles_data.append({
+                                'crop_path': f"images/{vehicle_crop_filename}",
+                                'bbox': vehicle_bbox,
+                                'detection_confidence': conf,
+                                'color': vehicle_attrs['color'],
+                                'make': vehicle_attrs['make'],
+                                'model': vehicle_attrs['model'],
+                                'confidence': vehicle_attrs['confidence']
+                            })
+                            
+                            logger.info(f"Vehicle {idx}: {vehicle_attrs['color']} {vehicle_attrs['make']} {vehicle_attrs['model']}")
                     else:
-                        # Fallback: recognize from full image
-                        logger.warning("No vehicle crop available, using full image")
+                        # Fallback: no vehicles detected, use full image
+                        logger.warning("No vehicles detected, processing full image")
                         vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(best_image)
+                        vehicles_data.append({
+                            'crop_path': None,
+                            'bbox': None,
+                            'detection_confidence': 0.0,
+                            'color': vehicle_attrs['color'],
+                            'make': vehicle_attrs['make'],
+                            'model': vehicle_attrs['model'],
+                            'confidence': vehicle_attrs['confidence']
+                        })
                     
-                    logger.info(f"Vehicle: {vehicle_attrs['color']} {vehicle_attrs['make']} {vehicle_attrs['model']}")
                 except Exception as e:
                     logger.error(f"Error during vehicle recognition: {e}")
+                    # Add unknown vehicle data
+                    vehicles_data.append({
+                        'crop_path': None,
+                        'bbox': None,
+                        'detection_confidence': 0.0,
+                        'color': 'unknown',
+                        'make': 'unknown',
+                        'model': 'unknown',
+                        'confidence': 0.0
+                    })
+
+            # Use primary vehicle (first one) for backward compatibility
+            primary_vehicle = vehicles_data[0] if vehicles_data else {
+                'crop_path': None,
+                'bbox': None,
+                'detection_confidence': 0.0,
+                'color': 'unknown',
+                'make': 'unknown',
+                'model': 'unknown',
+                'confidence': 0.0
+            }
 
             return {
                 'plate_number': best_result.ocr.text.upper().replace(' ', ''),
                 'confidence': best_result.ocr.confidence,
                 'image_path': f"images/{image_filename}",
                 'plate_crop_path': f"images/{crop_filename}",
-                'vehicle_crop_path': f"images/{vehicle_crop_filename}" if vehicle_crop_filename else None,
+                'vehicle_crop_path': primary_vehicle['crop_path'],
                 'box_coordinates': {
                     'xmin': bbox.x1,
                     'ymin': bbox.y1,
@@ -215,10 +255,11 @@ class ALPRProcessor:
                     'ymax': bbox.y2
                 },
                 'frame_count': len(frame_bytes_list),
-                'vehicle_color': vehicle_attrs['color'],
-                'vehicle_make': vehicle_attrs['make'],
-                'vehicle_model': vehicle_attrs['model'],
-                'vehicle_confidence': vehicle_attrs['confidence']
+                'vehicle_color': primary_vehicle['color'],
+                'vehicle_make': primary_vehicle['make'],
+                'vehicle_model': primary_vehicle['model'],
+                'vehicle_confidence': primary_vehicle['confidence'],
+                'vehicles': vehicles_data  # List of all detected vehicles
             }
 
         logger.info("No valid plates detected in any frame")
@@ -253,50 +294,71 @@ class ALPRProcessor:
                 logger.warning("Failed to decode frame for vehicle-only processing")
                 return None
             
-            # Get vehicle crop
-            vehicle_crop, vehicle_bbox = self.vehicle_recognizer.get_primary_vehicle_crop(img)
+            # Get all vehicle crops
+            vehicle_crops = self.vehicle_recognizer.get_all_vehicle_crops(img)
             
-            # Recognize vehicle attributes (use crop if available, otherwise full image)
-            if vehicle_crop is not None:
-                vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(vehicle_crop)
-            else:
-                vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(img)
-            
-            if vehicle_attrs['color'] == 'unknown' and vehicle_attrs['make'] == 'unknown':
-                logger.info("No vehicle attributes detected")
+            if not vehicle_crops:
+                logger.info("No vehicles detected")
                 self._save_debug_frames(frame_bytes_list, save_dir)
                 return None
             
-            logger.info(f"Vehicle detected (no plate): {vehicle_attrs['color']} {vehicle_attrs['make']} {vehicle_attrs['model']}")
+            # Process all vehicles
+            vehicles_data = []
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+            for idx, (vehicle_crop, vehicle_bbox, conf) in enumerate(vehicle_crops, 1):
+                # Recognize vehicle attributes from cropped image
+                vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(vehicle_crop)
+                
+                if vehicle_attrs['color'] == 'unknown' and vehicle_attrs['make'] == 'unknown':
+                    continue  # Skip unknown vehicles
+                
+                # Save vehicle crop
+                vehicle_desc = f"{vehicle_attrs['color']}_{vehicle_attrs['make']}"
+                vehicle_crop_filename = f"{timestamp}_NO_PLATE_{vehicle_desc}_vehicle_{idx}.jpg"
+                vehicle_crop_path = save_dir / "images" / vehicle_crop_filename
+                vehicle_crop_path.parent.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(str(vehicle_crop_path), vehicle_crop)
+                logger.info(f"Saved vehicle crop {idx}: {vehicle_crop_filename}")
+                
+                vehicles_data.append({
+                    'crop_path': f"images/{vehicle_crop_filename}",
+                    'bbox': vehicle_bbox,
+                    'detection_confidence': conf,
+                    'color': vehicle_attrs['color'],
+                    'make': vehicle_attrs['make'],
+                    'model': vehicle_attrs['model'],
+                    'confidence': vehicle_attrs['confidence']
+                })
+                
+                logger.info(f"Vehicle {idx} (no plate): {vehicle_attrs['color']} {vehicle_attrs['make']} {vehicle_attrs['model']}")
+            
+            if not vehicles_data:
+                logger.info("No valid vehicle attributes detected")
+                self._save_debug_frames(frame_bytes_list, save_dir)
+                return None
             
             # Save full image with vehicle-only naming
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            vehicle_desc = f"{vehicle_attrs['color']}_{vehicle_attrs['make']}"
+            primary_vehicle = vehicles_data[0]
+            vehicle_desc = f"{primary_vehicle['color']}_{primary_vehicle['make']}"
             image_filename = f"{timestamp}_NO_PLATE_{vehicle_desc}.jpg"
             image_path = save_dir / "images" / image_filename
             image_path.parent.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(str(image_path), img)
-            
-            # Save vehicle crop if available
-            vehicle_crop_filename = None
-            if vehicle_crop is not None:
-                vehicle_crop_filename = f"{timestamp}_NO_PLATE_{vehicle_desc}_vehicle.jpg"
-                vehicle_crop_path = save_dir / "images" / vehicle_crop_filename
-                cv2.imwrite(str(vehicle_crop_path), vehicle_crop)
-                logger.info(f"Saved vehicle crop: {vehicle_crop_filename}")
             
             return {
                 'plate_number': 'NO_PLATE',
                 'confidence': 0.0,
                 'image_path': f"images/{image_filename}",
                 'plate_crop_path': None,
-                'vehicle_crop_path': f"images/{vehicle_crop_filename}" if vehicle_crop_filename else None,
+                'vehicle_crop_path': primary_vehicle['crop_path'],
                 'box_coordinates': {},
                 'frame_count': len(frame_bytes_list),
-                'vehicle_color': vehicle_attrs['color'],
-                'vehicle_make': vehicle_attrs['make'],
-                'vehicle_model': vehicle_attrs['model'],
-                'vehicle_confidence': vehicle_attrs['confidence']
+                'vehicle_color': primary_vehicle['color'],
+                'vehicle_make': primary_vehicle['make'],
+                'vehicle_model': primary_vehicle['model'],
+                'vehicle_confidence': primary_vehicle['confidence'],
+                'vehicles': vehicles_data  # List of all detected vehicles
             }
             
         except Exception as e:

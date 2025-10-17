@@ -9,9 +9,8 @@ Automatic Number Plate Recognition (ANPR) system for Reolink cameras with AI veh
 ### Vehicle Recognition (October 2025)
 - **Vehicle Color Detection** - Automatically detects vehicle colors using computer vision
 - **Make & Model Recognition** - Identifies vehicle manufacturer and model using deep learning
-- **Vehicle Detection & Cropping** - YOLO-based detection saves cropped images of vehicles
+- **Vehicle Detection & Cropping** - YOLOv9-based detection saves cropped images of vehicles
 - **Multi-Vehicle Support** - Detects and selects the primary vehicle from multiple vehicles in frame
-- **Smart Model Reuse** - Reuses ALPR detector for vehicle detection when YOLO unavailable
 - **Vehicle-Only Tracking** - Tracks vehicles even when no plate is detected
 - **Enhanced Notifications** - Telegram & Home Assistant now include full vehicle information
 - **Smart Deduplication** - Separate 30s cooldown for plate vs. vehicle-based detections
@@ -20,9 +19,9 @@ Automatic Number Plate Recognition (ANPR) system for Reolink cameras with AI veh
 
 **Upgrade Notes:**
 - Existing databases auto-migrate on startup
-- PyTorch optional but recommended: `pip install torch torchvision`
-- YOLO (ultralytics) optional for best vehicle detection: `pip install ultralytics`
-- Falls back to ALPR detector or center-crop if YOLO not installed
+- PyTorch required: `pip install torch torchvision`
+- YOLOv9 required: `pip install ultralytics` (uses same YOLO architecture as ALPR)
+- Falls back to center-crop estimation if YOLOv9 unavailable
 - All features disabled by default for minimal impact
 - See [VEHICLE_RECOGNITION.md](VEHICLE_RECOGNITION.md) for details
 
@@ -64,29 +63,37 @@ ReolinkANPR now includes advanced vehicle recognition capabilities powered by de
 - **Vehicle Color** - Black, White, Silver, Red, Blue, Green, Yellow, etc. (Very accurate!)
 - **Vehicle Make** - Toyota, Ford, Honda, Chevrolet, BMW, Mercedes, etc.
 - **Vehicle Model** - Sedan, SUV, Truck, etc.
-- **Vehicle Location** - YOLO detects and crops individual vehicles from multi-vehicle scenes
+- **Vehicle Location** - YOLOv9 detects and crops individual vehicles from multi-vehicle scenes
 
 ### Key Features
-- **Multi-Vehicle Detection** - YOLO identifies all vehicles in frame, selects primary target
-- **Smart Model Reuse** - Leverages existing ALPR detector for vehicle region estimation
-- **Smart Cropping** - Saves cropped images of detected vehicles for better analysis
+- **Multi-Vehicle Processing** - Detects, crops, and analyzes ALL vehicles in frame
+- **Individual Recognition** - Each vehicle gets separate color/make/model analysis
+- **Separate Notifications** - Sends individual Telegram/HA notifications for each vehicle
+- **Cropped Analysis** - Uses cropped vehicle images for more accurate recognition
+- **Consistent Architecture** - Uses YOLOv9 for both plate and vehicle detection
 - **Track ALL Vehicles** - Even when no license plate is detected
-- **Enhanced Notifications** - Telegram and Home Assistant receive full vehicle info
 - **Smart Deduplication** - Separate logic for plates vs. vehicle-only detections
 - **Optional & Configurable** - Toggle on/off via web interface
 - **GPU Acceleration** - Automatically uses CUDA if available
-- **Multi-Tier Fallback** - YOLO → ALPR Detector → Center-crop estimation
+- **Fallback Mode** - Uses center-crop estimation if YOLOv9 unavailable
 
-### Detection Methods (Priority Order)
-1. **YOLOv8** (if installed) - Best accuracy, detects cars, trucks, buses, motorcycles
-2. **ALPR Detector** - Estimates vehicle region from plate detections (built-in, no extra install)
-3. **Center-Crop** - Simple fallback assuming vehicle in center of frame
+### Detection Methods
+1. **YOLOv9** (primary) - Accurate detection of cars, trucks, buses, motorcycles
+2. **Center-Crop** (fallback) - Simple estimation assuming vehicle in center of frame
+
+### Multi-Vehicle Handling
+When multiple vehicles are detected in a single frame:
+- **Each vehicle is cropped** and saved as separate image
+- **Each vehicle is analyzed** independently for color/make/model
+- **Separate notifications** sent for each vehicle (e.g., "ABC123 (Vehicle 1/3)")
+- **Primary vehicle** used for database storage and dashboard display
+- **All vehicle data** preserved in `vehicles` array
 
 ### Saved Images
 For each detection, the system saves:
 1. **Full frame** - Complete camera view
 2. **Plate crop** - Cropped license plate (if detected)
-3. **Vehicle crop** - Cropped vehicle image (YOLO-detected or estimated)
+3. **Vehicle crops** - Cropped images for each detected vehicle (e.g., `*_vehicle_1.jpg`, `*_vehicle_2.jpg`)
 
 ### Example Dashboard Entry
 ```
