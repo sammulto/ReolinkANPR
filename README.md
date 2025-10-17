@@ -60,7 +60,7 @@ Automatic Number Plate Recognition (ANPR) system for Reolink cameras with AI veh
 ReolinkANPR now includes advanced vehicle recognition capabilities powered by deep learning:
 
 ### What It Detects
-- **Vehicle Color** - Black, White, Silver, Red, Blue, Green, Yellow, etc. (Very accurate!)
+- **Vehicle Color** - Black, White, Silver, Gray, Red, Blue, Green, Yellow, Orange, Brown, Gold, Cyan, Purple, Pink
 - **Vehicle Make** - Toyota, Ford, Honda, Chevrolet, BMW, Mercedes, etc.
 - **Vehicle Model** - Sedan, SUV, Truck, etc.
 - **Vehicle Location** - YOLOv9 detects and crops individual vehicles from multi-vehicle scenes

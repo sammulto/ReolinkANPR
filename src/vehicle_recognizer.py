@@ -29,7 +29,8 @@ class VehicleRecognizer:
     # Common vehicle colors
     COLORS = [
         'black', 'white', 'silver', 'gray', 'red', 'blue', 
-        'green', 'yellow', 'orange', 'brown', 'gold', 'beige'
+        'green', 'yellow', 'orange', 'brown', 'gold', 'beige',
+        'cyan', 'purple', 'pink'
     ]
     
     # Common vehicle makes (expandable)
@@ -273,61 +274,129 @@ class VehicleRecognizer:
     
     def _detect_color(self, image: np.ndarray) -> str:
         """
-        Detect dominant vehicle color using HSV color space analysis.
+        Detect dominant vehicle color using improved HSV analysis with histogram-based approach.
         
         Args:
-            image: OpenCV image (BGR format)
+            image: OpenCV image (BGR format) - should be cropped to vehicle
             
         Returns:
             Color name as string
         """
         try:
-            # Convert to HSV
+            # Convert to HSV and LAB color spaces for better color detection
             hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
             
             # Get image dimensions
             height, width = hsv.shape[:2]
             
-            # Sample center region (vehicle body, avoiding background)
-            center_y1, center_y2 = int(height * 0.3), int(height * 0.7)
-            center_x1, center_x2 = int(width * 0.3), int(width * 0.7)
-            center_region = hsv[center_y1:center_y2, center_x1:center_x2]
+            # Sample multiple regions to avoid shadows/reflections
+            # Top center (hood), middle center (door/body), lower center (body)
+            regions = []
             
-            # Calculate histogram for hue channel
-            h, s, v = cv2.split(center_region)
+            # Top region (hood area) - 20-40% height, 30-70% width
+            top_region = hsv[int(height * 0.2):int(height * 0.4), int(width * 0.3):int(width * 0.7)]
+            regions.append(top_region)
             
-            # Check for grayscale (low saturation)
-            avg_saturation = np.mean(s)
-            avg_value = np.mean(v)
+            # Middle region (door area) - 40-70% height, 30-70% width
+            mid_region = hsv[int(height * 0.4):int(height * 0.7), int(width * 0.3):int(width * 0.7)]
+            regions.append(mid_region)
             
-            if avg_saturation < 30:  # Low saturation = grayscale
-                if avg_value < 60:
+            # Combine all regions
+            combined_region = np.vstack(regions)
+            
+            # Split HSV channels
+            h, s, v = cv2.split(combined_region)
+            
+            # Filter out very dark (shadows) and very bright (reflections) pixels
+            mask = (v > 30) & (v < 220)
+            
+            # Calculate statistics on filtered pixels
+            if np.sum(mask) < 100:  # Not enough valid pixels
+                logger.warning("Insufficient valid pixels for color detection")
+                return 'unknown'
+            
+            filtered_h = h[mask]
+            filtered_s = s[mask]
+            filtered_v = v[mask]
+            
+            # Calculate median values (more robust than mean)
+            median_saturation = np.median(filtered_s)
+            median_value = np.median(filtered_v)
+            median_hue = np.median(filtered_h)
+            
+            # Detect achromatic colors (black, white, gray, silver) first
+            if median_saturation < 40:  # Low saturation = achromatic
+                if median_value < 50:
                     return 'black'
-                elif avg_value > 200:
+                elif median_value > 180:
                     return 'white'
-                elif avg_value > 150:
+                elif median_value > 130:
                     return 'silver'
                 else:
                     return 'gray'
             
-            # For colored vehicles, analyze hue
-            avg_hue = np.mean(h)
+            # For chromatic colors, use histogram-based approach
+            # Create hue histogram (ignore low saturation pixels)
+            chromatic_mask = (s > 40) & (v > 30) & (v < 220)
+            if np.sum(chromatic_mask) < 50:
+                # Not enough chromatic pixels, fall back to achromatic
+                if median_value < 80:
+                    return 'black'
+                elif median_value > 160:
+                    return 'white'
+                else:
+                    return 'gray'
             
-            # Map hue to color names
-            # HSV hue ranges: Red 0-10/170-180, Orange 10-25, Yellow 25-35,
-            # Green 35-85, Blue 85-130, Purple 130-170
-            if avg_hue < 10 or avg_hue > 170:
+            chromatic_hue = h[chromatic_mask]
+            
+            # Calculate hue histogram with 180 bins (0-180 in OpenCV HSV)
+            hist = cv2.calcHist([chromatic_hue], [0], None, [180], [0, 180])
+            hist = hist.flatten()
+            
+            # Smooth histogram to reduce noise
+            from scipy.ndimage import gaussian_filter1d
+            hist_smooth = gaussian_filter1d(hist, sigma=3)
+            
+            # Find dominant hue (peak in histogram)
+            dominant_hue = np.argmax(hist_smooth)
+            
+            # Map hue to color names with improved ranges
+            # Red: 0-10 and 160-180 (wraps around)
+            # Orange: 10-20
+            # Yellow: 20-35
+            # Green: 35-80
+            # Cyan: 80-95
+            # Blue: 95-135
+            # Purple/Magenta: 135-160
+            
+            if dominant_hue < 10 or dominant_hue >= 160:
+                # Check if it's more brown or red based on saturation and value
+                if median_saturation < 100 and median_value < 120:
+                    return 'brown'
                 return 'red'
-            elif avg_hue < 25:
+            elif dominant_hue < 20:
+                # Orange or brown
+                if median_value < 100:
+                    return 'brown'
                 return 'orange'
-            elif avg_hue < 35:
+            elif dominant_hue < 35:
+                # Yellow or gold
+                if median_saturation < 80:
+                    return 'gold'
                 return 'yellow'
-            elif avg_hue < 85:
+            elif dominant_hue < 80:
                 return 'green'
-            elif avg_hue < 130:
+            elif dominant_hue < 95:
+                return 'cyan'
+            elif dominant_hue < 135:
                 return 'blue'
+            elif dominant_hue < 160:
+                # Purple, magenta, or pink
+                if median_value > 150:
+                    return 'pink'
+                return 'purple'
             else:
-                return 'red'  # Fallback
+                return 'red'
                 
         except Exception as e:
             logger.error(f"Error detecting color: {e}")
