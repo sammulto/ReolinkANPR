@@ -149,7 +149,7 @@ class Notifier:
             logger.error(f"Failed to send to Home Assistant: {e}")
 
     async def _send_to_telegram(self, message: str, vehicle_crop_path: Optional[str], full_image_path: Optional[str], plate_crop_path: Optional[str] = None):
-        """Send message to Telegram with vehicle crop, full frame, and optional plate crop (3-image album)."""
+        """Send message to Telegram sequentially: full frame, then cropped images, then description."""
         try:
             async with aiohttp.ClientSession() as session:
                 # Check which images exist (handle None values properly)
@@ -157,98 +157,66 @@ class Notifier:
                 has_full_image = bool(full_image_path and Path(full_image_path).exists())
                 has_plate_crop = bool(plate_crop_path and Path(plate_crop_path).exists())
                 
-                # Count available images
-                image_count = int(has_vehicle_crop) + int(has_full_image) + int(has_plate_crop)
+                photo_url = f"https://api.telegram.org/bot{self.telegram_token}/sendPhoto"
+                message_url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
                 
-                # If we have multiple images, send as media group
-                if image_count >= 2:
-                    url = f"https://api.telegram.org/bot{self.telegram_token}/sendMediaGroup"
-                    
-                    form = aiohttp.FormData()
-                    form.add_field('chat_id', self.telegram_chat_id)
-                    
-                    media = []
-                    first_image = True
-                    
-                    # Add vehicle crop if available
-                    if has_vehicle_crop:
-                        with open(vehicle_crop_path, 'rb') as f:
-                            vehicle_data = f.read()
-                        form.add_field('vehicle_photo', vehicle_data, filename='vehicle_crop.jpg', content_type='image/jpeg')
-                        media.append({
-                            'type': 'photo',
-                            'media': 'attach://vehicle_photo',
-                            'caption': message if first_image else 'Vehicle Crop'
-                        })
-                        first_image = False
-                    
-                    # Add full frame if available
-                    if has_full_image:
-                        with open(full_image_path, 'rb') as f:
-                            full_data = f.read()
-                        form.add_field('full_photo', full_data, filename='full_frame.jpg', content_type='image/jpeg')
-                        media.append({
-                            'type': 'photo',
-                            'media': 'attach://full_photo',
-                            'caption': message if first_image else 'Full Frame'
-                        })
-                        first_image = False
-                    
-                    # Add plate crop if available
-                    if has_plate_crop:
-                        with open(plate_crop_path, 'rb') as f:
-                            plate_data = f.read()
-                        form.add_field('plate_photo', plate_data, filename='plate.jpg', content_type='image/jpeg')
-                        media.append({
-                            'type': 'photo',
-                            'media': 'attach://plate_photo',
-                            'caption': 'License Plate Crop'
-                        })
-                    
-                    import json
-                    form.add_field('media', json.dumps(media), content_type='application/json')
-                    
-                    async with session.post(url, data=form, timeout=30) as response:
-                        if response.status == 200:
-                            logger.info(f"Sent media group ({len(media)} images) to Telegram: {message}")
-                        else:
-                            response_text = await response.text()
-                            logger.warning(f"Telegram media group returned status {response.status}: {response_text}")
-                
-                # If we have only one image, send single photo with caption
-                elif has_vehicle_crop or has_full_image:
-                    url = f"https://api.telegram.org/bot{self.telegram_token}/sendPhoto"
-                    
-                    # Prefer vehicle crop over full image
-                    image_to_send = vehicle_crop_path if has_vehicle_crop else full_image_path
-                    
-                    # Read image file
-                    with open(image_to_send, 'rb') as img_file:
+                # 1. Send full frame first (if available)
+                if has_full_image:
+                    with open(full_image_path, 'rb') as img_file:
                         form = aiohttp.FormData()
                         form.add_field('chat_id', self.telegram_chat_id)
-                        form.add_field('caption', message, content_type='text/plain')
-                        form.add_field('photo', img_file, filename='detection.jpg', content_type='image/jpeg')
+                        form.add_field('caption', 'Full Frame', content_type='text/plain')
+                        form.add_field('photo', img_file, filename='full_frame.jpg', content_type='image/jpeg')
                         
-                        async with session.post(url, data=form, timeout=30) as response:
+                        async with session.post(photo_url, data=form, timeout=30) as response:
                             if response.status == 200:
-                                logger.info(f"Sent photo to Telegram: {message}")
+                                logger.info("Sent full frame to Telegram")
                             else:
                                 response_text = await response.text()
-                                logger.warning(f"Telegram photo returned status {response.status}: {response_text}")
-                else:
-                    # No image or image doesn't exist - send text only
-                    url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
-                    data = {
-                        'chat_id': self.telegram_chat_id,
-                        'text': message,
-                        'parse_mode': 'HTML'
-                    }
-                    async with session.post(url, json=data, timeout=10) as response:
-                        if response.status == 200:
-                            logger.info(f"Sent to Telegram: {message}")
-                        else:
-                            response_text = await response.text()
-                            logger.warning(f"Telegram returned status {response.status}: {response_text}")
+                                logger.warning(f"Telegram full frame returned status {response.status}: {response_text}")
+                
+                # 2. Send vehicle crop (if available)
+                if has_vehicle_crop:
+                    with open(vehicle_crop_path, 'rb') as img_file:
+                        form = aiohttp.FormData()
+                        form.add_field('chat_id', self.telegram_chat_id)
+                        form.add_field('caption', 'Vehicle Crop', content_type='text/plain')
+                        form.add_field('photo', img_file, filename='vehicle_crop.jpg', content_type='image/jpeg')
+                        
+                        async with session.post(photo_url, data=form, timeout=30) as response:
+                            if response.status == 200:
+                                logger.info("Sent vehicle crop to Telegram")
+                            else:
+                                response_text = await response.text()
+                                logger.warning(f"Telegram vehicle crop returned status {response.status}: {response_text}")
+                
+                # 3. Send plate crop (if available)
+                if has_plate_crop:
+                    with open(plate_crop_path, 'rb') as img_file:
+                        form = aiohttp.FormData()
+                        form.add_field('chat_id', self.telegram_chat_id)
+                        form.add_field('caption', 'License Plate Crop', content_type='text/plain')
+                        form.add_field('photo', img_file, filename='plate_crop.jpg', content_type='image/jpeg')
+                        
+                        async with session.post(photo_url, data=form, timeout=30) as response:
+                            if response.status == 200:
+                                logger.info("Sent plate crop to Telegram")
+                            else:
+                                response_text = await response.text()
+                                logger.warning(f"Telegram plate crop returned status {response.status}: {response_text}")
+                
+                # 4. Send description message last
+                data = {
+                    'chat_id': self.telegram_chat_id,
+                    'text': message,
+                    'parse_mode': 'HTML'
+                }
+                async with session.post(message_url, json=data, timeout=10) as response:
+                    if response.status == 200:
+                        logger.info(f"Sent description to Telegram: {message}")
+                    else:
+                        response_text = await response.text()
+                        logger.warning(f"Telegram description returned status {response.status}: {response_text}")
         except Exception as e:
             logger.error(f"Failed to send to Telegram: {e}")
 
