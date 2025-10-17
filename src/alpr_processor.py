@@ -173,50 +173,19 @@ class ALPRProcessor:
             bbox = best_result.detection.bounding_box
 
             # Recognize vehicle attributes (color, make, model) for ALL detected vehicles
+            # Sample across multiple frames for better accuracy
             vehicles_data = []
             
             if self.vehicle_recognizer and self.vehicle_recognizer.enabled:
                 try:
-                    logger.info("Detecting and recognizing all vehicles...")
-                    
-                    # Get all vehicle crops
-                    vehicle_crops = self.vehicle_recognizer.get_all_vehicle_crops(best_image)
-                    
-                    if vehicle_crops:
-                        for idx, (vehicle_crop, vehicle_bbox, conf) in enumerate(vehicle_crops, 1):
-                            # Save vehicle crop
-                            vehicle_crop_filename = f"{timestamp}_{best_result.ocr.text.upper().replace(' ', '')}_vehicle_{idx}.jpg"
-                            vehicle_crop_path = save_dir / "images" / vehicle_crop_filename
-                            cv2.imwrite(str(vehicle_crop_path), vehicle_crop)
-                            logger.info(f"Saved vehicle crop {idx}: {vehicle_crop_filename}")
-                            
-                            # Recognize attributes from the cropped vehicle
-                            vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(vehicle_crop)
-                            
-                            vehicles_data.append({
-                                'crop_path': f"images/{vehicle_crop_filename}",
-                                'bbox': vehicle_bbox,
-                                'detection_confidence': conf,
-                                'color': vehicle_attrs['color'],
-                                'make': vehicle_attrs['make'],
-                                'model': vehicle_attrs['model'],
-                                'confidence': vehicle_attrs['confidence']
-                            })
-                            
-                            logger.info(f"Vehicle {idx}: {vehicle_attrs['color']} {vehicle_attrs['make']} {vehicle_attrs['model']}")
-                    else:
-                        # Fallback: no vehicles detected, use full image
-                        logger.warning("No vehicles detected, processing full image")
-                        vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(best_image)
-                        vehicles_data.append({
-                            'crop_path': None,
-                            'bbox': None,
-                            'detection_confidence': 0.0,
-                            'color': vehicle_attrs['color'],
-                            'make': vehicle_attrs['make'],
-                            'model': vehicle_attrs['model'],
-                            'confidence': vehicle_attrs['confidence']
-                        })
+                    logger.info("Detecting and recognizing all vehicles across multiple frames...")
+                    vehicles_data = self._sample_vehicle_recognition_multiframe(
+                        frame_bytes_list, 
+                        best_image, 
+                        timestamp, 
+                        best_result.ocr.text.upper().replace(' ', ''),
+                        save_dir
+                    )
                     
                 except Exception as e:
                     logger.error(f"Error during vehicle recognition: {e}")
@@ -265,9 +234,257 @@ class ALPRProcessor:
         logger.info("No valid plates detected in any frame")
         return None
 
+    def _sample_vehicle_recognition_multiframe(
+        self,
+        frame_bytes_list: List[bytes],
+        best_plate_image: np.ndarray,
+        timestamp: str,
+        plate_text: str,
+        save_dir: Path
+    ) -> List[Dict]:
+        """
+        Sample vehicle recognition across multiple frames for better accuracy.
+        
+        Args:
+            frame_bytes_list: All frames to sample from
+            best_plate_image: The image with best plate detection (fallback)
+            timestamp: Timestamp for filenames
+            plate_text: Plate text for filenames
+            save_dir: Directory to save images
+            
+        Returns:
+            List of vehicle data dicts
+        """
+        vehicle_tracks = []
+        
+        # Sample a subset of frames (e.g., every 3rd frame for efficiency)
+        frame_step = max(1, len(frame_bytes_list) // 10)  # Sample up to 10 frames
+        sampled_indices = range(0, len(frame_bytes_list), frame_step)
+        
+        logger.info(f"Sampling vehicle recognition from {len(sampled_indices)} frames...")
+        
+        for frame_idx in sampled_indices:
+            try:
+                # Decode image
+                image_array = np.frombuffer(frame_bytes_list[frame_idx], np.uint8)
+                img = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+                
+                if img is None:
+                    continue
+                
+                # Get all vehicle crops in this frame
+                vehicle_crops = self.vehicle_recognizer.get_all_vehicle_crops(img)
+                
+                if not vehicle_crops:
+                    continue
+                
+                # Process each detected vehicle
+                for vehicle_crop, vehicle_bbox, det_conf in vehicle_crops:
+                    # Recognize vehicle attributes
+                    vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(vehicle_crop)
+                    
+                    # Try to match with existing tracks using IoU
+                    matched_track = None
+                    best_iou = 0.3  # Minimum IoU threshold
+                    
+                    for track in vehicle_tracks:
+                        last_detection = track['detections'][-1]
+                        iou = self._calculate_iou(vehicle_bbox, last_detection['bbox'])
+                        if iou > best_iou:
+                            best_iou = iou
+                            matched_track = track
+                    
+                    detection = {
+                        'frame_idx': frame_idx,
+                        'bbox': vehicle_bbox,
+                        'crop': vehicle_crop.copy(),
+                        'det_conf': det_conf,
+                        'color': vehicle_attrs['color'],
+                        'make': vehicle_attrs['make'],
+                        'model': vehicle_attrs['model'],
+                        'confidence': vehicle_attrs['confidence']
+                    }
+                    
+                    if matched_track:
+                        matched_track['detections'].append(detection)
+                        if vehicle_attrs['confidence'] > matched_track['best_confidence']:
+                            matched_track['best_confidence'] = vehicle_attrs['confidence']
+                            matched_track['best_detection'] = detection
+                    else:
+                        vehicle_tracks.append({
+                            'detections': [detection],
+                            'best_confidence': vehicle_attrs['confidence'],
+                            'best_detection': detection
+                        })
+                
+            except Exception as e:
+                logger.debug(f"Error sampling frame {frame_idx}: {e}")
+                continue
+        
+        # If no vehicles found in sampled frames, fall back to best plate image
+        if not vehicle_tracks:
+            logger.info("No vehicles in sampled frames, using best plate frame")
+            vehicle_crops = self.vehicle_recognizer.get_all_vehicle_crops(best_plate_image)
+            
+            if vehicle_crops:
+                for vehicle_crop, vehicle_bbox, det_conf in vehicle_crops:
+                    vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(vehicle_crop)
+                    vehicle_tracks.append({
+                        'detections': [{
+                            'frame_idx': -1,
+                            'bbox': vehicle_bbox,
+                            'crop': vehicle_crop.copy(),
+                            'det_conf': det_conf,
+                            'color': vehicle_attrs['color'],
+                            'make': vehicle_attrs['make'],
+                            'model': vehicle_attrs['model'],
+                            'confidence': vehicle_attrs['confidence']
+                        }],
+                        'best_confidence': vehicle_attrs['confidence'],
+                        'best_detection': {
+                            'bbox': vehicle_bbox,
+                            'crop': vehicle_crop.copy(),
+                            'det_conf': det_conf,
+                            'color': vehicle_attrs['color'],
+                            'make': vehicle_attrs['make'],
+                            'model': vehicle_attrs['model'],
+                            'confidence': vehicle_attrs['confidence']
+                        }
+                    })
+            else:
+                # Last resort: process full image
+                logger.warning("No vehicles detected, processing full image")
+                vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(best_plate_image)
+                return [{
+                    'crop_path': None,
+                    'bbox': None,
+                    'detection_confidence': 0.0,
+                    'color': vehicle_attrs['color'],
+                    'make': vehicle_attrs['make'],
+                    'model': vehicle_attrs['model'],
+                    'confidence': vehicle_attrs['confidence'],
+                    'sample_count': 1
+                }]
+        
+        # Process vehicle tracks and aggregate results
+        vehicles_data = []
+        logger.info(f"Found {len(vehicle_tracks)} unique vehicles")
+        
+        for idx, track in enumerate(vehicle_tracks, 1):
+            # Aggregate results from multiple detections
+            aggregated = self._aggregate_vehicle_results(track['detections'])
+            best_det = track['best_detection']
+            
+            logger.info(f"Vehicle {idx}: {len(track['detections'])} samples, {aggregated['color']} {aggregated['make']} {aggregated['model']}")
+            
+            # Save best crop from this track
+            vehicle_crop_filename = f"{timestamp}_{plate_text}_vehicle_{idx}.jpg"
+            vehicle_crop_path = save_dir / "images" / vehicle_crop_filename
+            cv2.imwrite(str(vehicle_crop_path), best_det['crop'])
+            
+            vehicles_data.append({
+                'crop_path': f"images/{vehicle_crop_filename}",
+                'bbox': best_det['bbox'],
+                'detection_confidence': best_det['det_conf'],
+                'color': aggregated['color'],
+                'make': aggregated['make'],
+                'model': aggregated['model'],
+                'confidence': aggregated['confidence'],
+                'sample_count': len(track['detections'])
+            })
+        
+        return vehicles_data
+
+    def _calculate_iou(self, bbox1: Tuple[int, int, int, int], bbox2: Tuple[int, int, int, int]) -> float:
+        """
+        Calculate Intersection over Union (IoU) between two bounding boxes.
+        
+        Args:
+            bbox1, bbox2: Bounding boxes in format (x1, y1, x2, y2)
+            
+        Returns:
+            IoU value between 0 and 1
+        """
+        x1_min, y1_min, x1_max, y1_max = bbox1
+        x2_min, y2_min, x2_max, y2_max = bbox2
+        
+        # Calculate intersection area
+        inter_x_min = max(x1_min, x2_min)
+        inter_y_min = max(y1_min, y2_min)
+        inter_x_max = min(x1_max, x2_max)
+        inter_y_max = min(y1_max, y2_max)
+        
+        if inter_x_max <= inter_x_min or inter_y_max <= inter_y_min:
+            return 0.0
+        
+        inter_area = (inter_x_max - inter_x_min) * (inter_y_max - inter_y_min)
+        
+        # Calculate union area
+        bbox1_area = (x1_max - x1_min) * (y1_max - y1_min)
+        bbox2_area = (x2_max - x2_min) * (y2_max - y2_min)
+        union_area = bbox1_area + bbox2_area - inter_area
+        
+        if union_area == 0:
+            return 0.0
+        
+        return inter_area / union_area
+
+    def _aggregate_vehicle_results(self, detections: List[Dict]) -> Dict:
+        """
+        Aggregate vehicle attributes from multiple detections using voting and confidence.
+        
+        Args:
+            detections: List of vehicle detection dicts with color, make, model, confidence
+            
+        Returns:
+            Dict with aggregated color, make, model, and average confidence
+        """
+        if not detections:
+            return {
+                'color': 'unknown',
+                'make': 'unknown',
+                'model': 'unknown',
+                'confidence': 0.0
+            }
+        
+        # Count occurrences and track confidences
+        colors = {}
+        makes = {}
+        models = {}
+        confidences = []
+        
+        for det in detections:
+            color = det['color']
+            make = det['make']
+            model = det['model']
+            conf = det['confidence']
+            
+            if color != 'unknown':
+                colors[color] = colors.get(color, 0) + 1
+            if make != 'unknown':
+                makes[make] = makes.get(make, 0) + 1
+            if model != 'unknown':
+                models[model] = models.get(model, 0) + 1
+            
+            confidences.append(conf)
+        
+        # Select most common value (voting)
+        best_color = max(colors.items(), key=lambda x: x[1])[0] if colors else 'unknown'
+        best_make = max(makes.items(), key=lambda x: x[1])[0] if makes else 'unknown'
+        best_model = max(models.items(), key=lambda x: x[1])[0] if models else 'unknown'
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+        
+        return {
+            'color': best_color,
+            'make': best_make,
+            'model': best_model,
+            'confidence': avg_confidence
+        }
+
     def _process_vehicle_only(self, frame_bytes_list: List[bytes], save_dir: Path) -> Optional[Dict]:
         """
         Process vehicle recognition when no plate is detected.
+        Samples multiple frames for better accuracy.
         
         Args:
             frame_bytes_list: List of frame bytes to process
@@ -277,74 +494,136 @@ class ALPRProcessor:
             Dict with vehicle info but no plate data, or None if processing fails
         """
         try:
-            logger.info("No plate detected - performing vehicle-only recognition...")
+            logger.info(f"No plate detected - performing vehicle-only recognition on {len(frame_bytes_list)} frames...")
             
-            # Select the middle frame (usually best quality)
             if not frame_bytes_list:
                 return None
             
-            mid_idx = len(frame_bytes_list) // 2
-            frame_bytes = frame_bytes_list[mid_idx]
+            # Track vehicles across frames: {vehicle_id: [detections]}
+            vehicle_tracks = []
+            best_frame_img = None
             
-            # Decode image
-            image_array = np.frombuffer(frame_bytes, np.uint8)
-            img = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+            # Process each frame to detect and recognize vehicles
+            for frame_idx, frame_bytes in enumerate(frame_bytes_list):
+                try:
+                    # Decode image
+                    image_array = np.frombuffer(frame_bytes, np.uint8)
+                    img = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+                    
+                    if img is None:
+                        continue
+                    
+                    # Get all vehicle crops in this frame
+                    vehicle_crops = self.vehicle_recognizer.get_all_vehicle_crops(img)
+                    
+                    if not vehicle_crops:
+                        continue
+                    
+                    # Process each detected vehicle
+                    for vehicle_crop, vehicle_bbox, det_conf in vehicle_crops:
+                        # Recognize vehicle attributes
+                        vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(vehicle_crop)
+                        
+                        if vehicle_attrs['color'] == 'unknown' and vehicle_attrs['make'] == 'unknown':
+                            continue
+                        
+                        # Try to match with existing tracks using IoU
+                        matched_track = None
+                        best_iou = 0.3  # Minimum IoU threshold
+                        
+                        for track in vehicle_tracks:
+                            # Compare with last bbox in this track
+                            last_detection = track['detections'][-1]
+                            iou = self._calculate_iou(vehicle_bbox, last_detection['bbox'])
+                            if iou > best_iou:
+                                best_iou = iou
+                                matched_track = track
+                        
+                        detection = {
+                            'frame_idx': frame_idx,
+                            'bbox': vehicle_bbox,
+                            'crop': vehicle_crop.copy(),
+                            'det_conf': det_conf,
+                            'color': vehicle_attrs['color'],
+                            'make': vehicle_attrs['make'],
+                            'model': vehicle_attrs['model'],
+                            'confidence': vehicle_attrs['confidence']
+                        }
+                        
+                        if matched_track:
+                            # Add to existing track
+                            matched_track['detections'].append(detection)
+                            # Update with highest confidence detection
+                            if vehicle_attrs['confidence'] > matched_track['best_confidence']:
+                                matched_track['best_confidence'] = vehicle_attrs['confidence']
+                                matched_track['best_detection'] = detection
+                                matched_track['best_frame_img'] = img.copy()
+                        else:
+                            # Create new track
+                            vehicle_tracks.append({
+                                'detections': [detection],
+                                'best_confidence': vehicle_attrs['confidence'],
+                                'best_detection': detection,
+                                'best_frame_img': img.copy()
+                            })
+                    
+                except Exception as e:
+                    logger.debug(f"Error processing frame {frame_idx+1}: {e}")
+                    continue
             
-            if img is None:
-                logger.warning("Failed to decode frame for vehicle-only processing")
-                return None
-            
-            # Get all vehicle crops
-            vehicle_crops = self.vehicle_recognizer.get_all_vehicle_crops(img)
-            
-            if not vehicle_crops:
-                logger.info("No vehicles detected")
+            if not vehicle_tracks:
+                logger.info("No vehicles detected in any frame")
                 self._save_debug_frames(frame_bytes_list, save_dir)
                 return None
             
-            # Process all vehicles
+            logger.info(f"Tracked {len(vehicle_tracks)} unique vehicles across {len(frame_bytes_list)} frames")
+            
+            # Process each vehicle track
             vehicles_data = []
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             
-            for idx, (vehicle_crop, vehicle_bbox, conf) in enumerate(vehicle_crops, 1):
-                # Recognize vehicle attributes from cropped image
-                vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(vehicle_crop)
+            for idx, track in enumerate(vehicle_tracks, 1):
+                # Aggregate results from all detections
+                aggregated = self._aggregate_vehicle_results(track['detections'])
+                best_det = track['best_detection']
                 
-                if vehicle_attrs['color'] == 'unknown' and vehicle_attrs['make'] == 'unknown':
-                    continue  # Skip unknown vehicles
+                logger.info(f"Vehicle {idx}: {len(track['detections'])} detections, aggregated as {aggregated['color']} {aggregated['make']} {aggregated['model']}")
                 
-                # Save vehicle crop
-                vehicle_desc = f"{vehicle_attrs['color']}_{vehicle_attrs['make']}"
+                # Save best crop from this track
+                vehicle_desc = f"{aggregated['color']}_{aggregated['make']}"
                 vehicle_crop_filename = f"{timestamp}_NO_PLATE_{vehicle_desc}_vehicle_{idx}.jpg"
                 vehicle_crop_path = save_dir / "images" / vehicle_crop_filename
                 vehicle_crop_path.parent.mkdir(parents=True, exist_ok=True)
-                cv2.imwrite(str(vehicle_crop_path), vehicle_crop)
+                cv2.imwrite(str(vehicle_crop_path), best_det['crop'])
                 logger.info(f"Saved vehicle crop {idx}: {vehicle_crop_filename}")
                 
                 vehicles_data.append({
                     'crop_path': f"images/{vehicle_crop_filename}",
-                    'bbox': vehicle_bbox,
-                    'detection_confidence': conf,
-                    'color': vehicle_attrs['color'],
-                    'make': vehicle_attrs['make'],
-                    'model': vehicle_attrs['model'],
-                    'confidence': vehicle_attrs['confidence']
+                    'bbox': best_det['bbox'],
+                    'detection_confidence': best_det['det_conf'],
+                    'color': aggregated['color'],
+                    'make': aggregated['make'],
+                    'model': aggregated['model'],
+                    'confidence': aggregated['confidence'],
+                    'sample_count': len(track['detections'])
                 })
                 
-                logger.info(f"Vehicle {idx} (no plate): {vehicle_attrs['color']} {vehicle_attrs['make']} {vehicle_attrs['model']}")
+                # Use the best frame for full image (from first vehicle)
+                if idx == 1:
+                    best_frame_img = track['best_frame_img']
             
             if not vehicles_data:
                 logger.info("No valid vehicle attributes detected")
                 self._save_debug_frames(frame_bytes_list, save_dir)
                 return None
             
-            # Save full image with vehicle-only naming
+            # Save full image with vehicle-only naming (from best frame)
             primary_vehicle = vehicles_data[0]
             vehicle_desc = f"{primary_vehicle['color']}_{primary_vehicle['make']}"
             image_filename = f"{timestamp}_NO_PLATE_{vehicle_desc}.jpg"
             image_path = save_dir / "images" / image_filename
             image_path.parent.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(image_path), img)
+            cv2.imwrite(str(image_path), best_frame_img)
             
             return {
                 'plate_number': 'NO_PLATE',
