@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from .logger import logger
+from .vehicle_recognizer import VehicleRecognizer
 
 try:
     from fast_alpr import ALPR
@@ -31,6 +32,21 @@ class ALPRProcessor:
             ocr_model=config.ocr_model,
             detector_conf_thresh=0.1  # Detection confidence (lower than recognition threshold)
         )
+
+        # Initialize vehicle recognizer
+        try:
+            if config.vehicle_recognition_enabled:
+                self.vehicle_recognizer = VehicleRecognizer(config)
+                if self.vehicle_recognizer.enabled:
+                    logger.info("Vehicle recognition enabled")
+                else:
+                    logger.warning("Vehicle recognition disabled - missing dependencies")
+            else:
+                logger.info("Vehicle recognition disabled in config")
+                self.vehicle_recognizer = None
+        except Exception as e:
+            logger.warning(f"Could not initialize vehicle recognizer: {e}")
+            self.vehicle_recognizer = None
 
         logger.info(f"FastALPR initialized with {config.detector_model}")
 
@@ -148,6 +164,16 @@ class ALPRProcessor:
 
             bbox = best_result.detection.bounding_box
 
+            # Recognize vehicle attributes (color, make, model)
+            vehicle_attrs = {'color': 'unknown', 'make': 'unknown', 'model': 'unknown', 'confidence': 0.0}
+            if self.vehicle_recognizer and self.vehicle_recognizer.enabled:
+                try:
+                    logger.info("Recognizing vehicle attributes...")
+                    vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(best_image)
+                    logger.info(f"Vehicle: {vehicle_attrs['color']} {vehicle_attrs['make']} {vehicle_attrs['model']}")
+                except Exception as e:
+                    logger.error(f"Error during vehicle recognition: {e}")
+
             return {
                 'plate_number': best_result.ocr.text.upper().replace(' ', ''),
                 'confidence': best_result.ocr.confidence,
@@ -159,7 +185,11 @@ class ALPRProcessor:
                     'xmax': bbox.x2,
                     'ymax': bbox.y2
                 },
-                'frame_count': len(frame_bytes_list)
+                'frame_count': len(frame_bytes_list),
+                'vehicle_color': vehicle_attrs['color'],
+                'vehicle_make': vehicle_attrs['make'],
+                'vehicle_model': vehicle_attrs['model'],
+                'vehicle_confidence': vehicle_attrs['confidence']
             }
 
         logger.info("No valid plates detected in any frame")

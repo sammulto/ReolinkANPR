@@ -28,7 +28,11 @@ class Database:
                     image_path TEXT,
                     plate_crop_path TEXT,
                     box_coordinates TEXT,
-                    frame_count INTEGER DEFAULT 1
+                    frame_count INTEGER DEFAULT 1,
+                    vehicle_color TEXT,
+                    vehicle_make TEXT,
+                    vehicle_model TEXT,
+                    vehicle_confidence REAL
                 )
             ''')
 
@@ -74,15 +78,20 @@ class Database:
             cursor = await db.execute('''
                 INSERT INTO events
                 (plate_number, confidence, image_path, plate_crop_path,
-                 box_coordinates, frame_count)
-                VALUES (?, ?, ?, ?, ?, ?)
+                 box_coordinates, frame_count, vehicle_color, vehicle_make, 
+                 vehicle_model, vehicle_confidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 plate_number,
                 event_data.get('confidence'),
                 event_data.get('image_path'),
                 event_data.get('plate_crop_path'),
                 json.dumps(event_data.get('box_coordinates', {})),
-                event_data.get('frame_count', 1)
+                event_data.get('frame_count', 1),
+                event_data.get('vehicle_color'),
+                event_data.get('vehicle_make'),
+                event_data.get('vehicle_model'),
+                event_data.get('vehicle_confidence')
             ))
             await db.commit()
             return cursor.lastrowid

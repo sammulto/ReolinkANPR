@@ -157,6 +157,7 @@
                             <th style="width: 200px;">Vehicle Image</th>
                             <th style="width: 120px;">Plate Crop</th>
                             <th style="width: 150px;">Plate Number</th>
+                            <th style="width: 200px;">Vehicle Info</th>
                             <th style="width: 120px;">Confidence</th>
                         </tr>
                     </thead>
@@ -186,6 +187,9 @@
                                     ${event.plate_number ? 
                                         `<span class="badge bg-primary fs-6">${event.plate_number}</span>` : 
                                         '<span class="text-muted">No plate</span>'}
+                                </td>
+                                <td>
+                                    ${formatVehicleInfo(event)}
                                 </td>
                                 <td>
                                     ${event.confidence ? 
@@ -248,6 +252,32 @@
         const date = new Date(isoFormat);
         if (isNaN(date.getTime())) return timestamp;
         return date.toLocaleString();
+    }
+
+    function formatVehicleInfo(event) {
+        const color = event.vehicle_color || 'unknown';
+        const make = event.vehicle_make || 'unknown';
+        const model = event.vehicle_model || 'unknown';
+        
+        if (color === 'unknown' && make === 'unknown' && model === 'unknown') {
+            return '<span class="text-muted">Not available</span>';
+        }
+        
+        // Capitalize first letter
+        const capitalize = (str) => str.charAt(0).toUpperCase() + str.slice(1);
+        
+        let info = [];
+        if (color !== 'unknown') {
+            info.push(`<span class="badge bg-info text-dark">${capitalize(color)}</span>`);
+        }
+        if (make !== 'unknown') {
+            info.push(`<span class="badge bg-secondary">${capitalize(make)}</span>`);
+        }
+        if (model !== 'unknown') {
+            info.push(`<span class="badge bg-secondary">${capitalize(model)}</span>`);
+        }
+        
+        return info.join(' ');
     }
 </script>
 {% endblock %}
