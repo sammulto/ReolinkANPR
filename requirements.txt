@@ -13,6 +13,9 @@ PyYAML
 torch>=2.0.0
 torchvision>=0.15.0
 Pillow>=9.0.0
+# ultralytics>=8.0.0  # OPTIONAL: YOLOv8 for best vehicle detection accuracy
+                      # If not installed, system uses ALPR detector or center-crop fallback
+                      # Install with: pip install ultralytics
 
 # Database and Web Interface
 aiosqlite>=0.19.0

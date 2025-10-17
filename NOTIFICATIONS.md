@@ -14,14 +14,19 @@ Notifications now include vehicle recognition information (color, make, model) i
 Red | Toyota | Sedan
 ```
 
+**Images:**
+- **Vehicle Photo** - Full vehicle image with the above text as caption
+- **Plate Crop** - Cropped license plate image (sent as media group/album)
+
 #### Without License Plate (Vehicle-Only)
 ```
-🚗 Vehicle Detected (No Plate)
+Vehicle Detected (No Plate)
 Blue | Honda | SUV
 ```
 
-#### With Image
-When an image is available, Telegram receives the vehicle photo with the above text as a caption.
+**Images:**
+- **Vehicle Photo** - Full vehicle image with the above text as caption
+- **No plate crop** (since no plate was detected)
 
 ### Home Assistant Webhook
 
@@ -241,6 +246,19 @@ The Telegram messages use emojis for better readability:
 - Vehicle color
 - Vehicle make
 - Vehicle model
+
+### Media Group (Album) Feature
+
+When a license plate is detected, Telegram receives **two images as an album**:
+1. **Full vehicle image** with detection details as caption
+2. **Cropped plate image** for easy reading
+
+This makes it easier to:
+- Read the plate number clearly
+- See the full vehicle context
+- Archive both views for records
+
+**Note:** Vehicle-only detections (no plate) will only send the full vehicle image.
 
 Example notification:
 ![Telegram Notification Example](screenshots/telegram_notification.png)

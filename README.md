@@ -9,6 +9,9 @@ Automatic Number Plate Recognition (ANPR) system for Reolink cameras with AI veh
 ### Vehicle Recognition (October 2025)
 - **Vehicle Color Detection** - Automatically detects vehicle colors using computer vision
 - **Make & Model Recognition** - Identifies vehicle manufacturer and model using deep learning
+- **Vehicle Detection & Cropping** - YOLO-based detection saves cropped images of vehicles
+- **Multi-Vehicle Support** - Detects and selects the primary vehicle from multiple vehicles in frame
+- **Smart Model Reuse** - Reuses ALPR detector for vehicle detection when YOLO unavailable
 - **Vehicle-Only Tracking** - Tracks vehicles even when no plate is detected
 - **Enhanced Notifications** - Telegram & Home Assistant now include full vehicle information
 - **Smart Deduplication** - Separate 30s cooldown for plate vs. vehicle-based detections
@@ -18,6 +21,8 @@ Automatic Number Plate Recognition (ANPR) system for Reolink cameras with AI veh
 **Upgrade Notes:**
 - Existing databases auto-migrate on startup
 - PyTorch optional but recommended: `pip install torch torchvision`
+- YOLO (ultralytics) optional for best vehicle detection: `pip install ultralytics`
+- Falls back to ALPR detector or center-crop if YOLO not installed
 - All features disabled by default for minimal impact
 - See [VEHICLE_RECOGNITION.md](VEHICLE_RECOGNITION.md) for details
 
@@ -59,13 +64,29 @@ ReolinkANPR now includes advanced vehicle recognition capabilities powered by de
 - **Vehicle Color** - Black, White, Silver, Red, Blue, Green, Yellow, etc. (Very accurate!)
 - **Vehicle Make** - Toyota, Ford, Honda, Chevrolet, BMW, Mercedes, etc.
 - **Vehicle Model** - Sedan, SUV, Truck, etc.
+- **Vehicle Location** - YOLO detects and crops individual vehicles from multi-vehicle scenes
 
 ### Key Features
+- **Multi-Vehicle Detection** - YOLO identifies all vehicles in frame, selects primary target
+- **Smart Model Reuse** - Leverages existing ALPR detector for vehicle region estimation
+- **Smart Cropping** - Saves cropped images of detected vehicles for better analysis
 - **Track ALL Vehicles** - Even when no license plate is detected
 - **Enhanced Notifications** - Telegram and Home Assistant receive full vehicle info
 - **Smart Deduplication** - Separate logic for plates vs. vehicle-only detections
 - **Optional & Configurable** - Toggle on/off via web interface
 - **GPU Acceleration** - Automatically uses CUDA if available
+- **Multi-Tier Fallback** - YOLO → ALPR Detector → Center-crop estimation
+
+### Detection Methods (Priority Order)
+1. **YOLOv8** (if installed) - Best accuracy, detects cars, trucks, buses, motorcycles
+2. **ALPR Detector** - Estimates vehicle region from plate detections (built-in, no extra install)
+3. **Center-Crop** - Simple fallback assuming vehicle in center of frame
+
+### Saved Images
+For each detection, the system saves:
+1. **Full frame** - Complete camera view
+2. **Plate crop** - Cropped license plate (if detected)
+3. **Vehicle crop** - Cropped vehicle image (YOLO-detected or estimated)
 
 ### Example Dashboard Entry
 ```
@@ -77,8 +98,12 @@ Plate: ABC123          Vehicle: Red | Toyota | Sedan
 🚗 Plate Detected: ABC123
 📊 Confidence: 95.2%
 Red | Toyota | Sedan
-[Vehicle Photo]
+[Album: Vehicle Photo + Plate Crop]
 ```
+
+**Note:** Telegram receives two images when a plate is detected:
+- Full vehicle image with detection details
+- Cropped license plate for easy reading
 
 **See [VEHICLE_RECOGNITION.md](VEHICLE_RECOGNITION.md) for complete documentation.**
 

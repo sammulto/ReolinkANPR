@@ -2,7 +2,7 @@
 
 import cv2
 import numpy as np
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Tuple
 from .logger import logger
 
 try:
@@ -14,6 +14,13 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
     logger.warning("PyTorch not available. Vehicle recognition will be disabled.")
+
+try:
+    from ultralytics import YOLO
+    YOLO_AVAILABLE = True
+except ImportError:
+    YOLO_AVAILABLE = False
+    logger.warning("Ultralytics YOLO not available. Vehicle detection will use fallback method.")
 
 
 class VehicleRecognizer:
@@ -33,10 +40,16 @@ class VehicleRecognizer:
         'buick', 'cadillac', 'volvo', 'tesla', 'acura', 'infiniti'
     ]
     
-    def __init__(self, config=None):
-        """Initialize vehicle recognizer with models."""
+    def __init__(self, config=None, alpr_detector=None):
+        """Initialize vehicle recognizer with models.
+        
+        Args:
+            config: Configuration object
+            alpr_detector: Optional FastALPR detector to reuse for vehicle detection
+        """
         self.config = config
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.alpr_detector = alpr_detector  # Reuse ALPR's YOLO detector if available
         
         if not TORCH_AVAILABLE:
             logger.error("PyTorch not available! Install with: pip install torch torchvision")
@@ -44,6 +57,23 @@ class VehicleRecognizer:
             return
         
         self.enabled = True
+        self.yolo_model = None
+        
+        # Try to load YOLO for vehicle detection
+        if YOLO_AVAILABLE:
+            try:
+                logger.info("Loading YOLO vehicle detection model...")
+                # Use YOLOv8n (nano) for fast vehicle detection
+                # YOLO can detect: car, truck, bus, motorcycle
+                self.yolo_model = YOLO('yolov8n.pt')
+                logger.info("YOLO vehicle detection loaded")
+            except Exception as e:
+                logger.warning(f"Failed to load YOLO: {e}. Will use ALPR detector or fallback.")
+                self.yolo_model = None
+        elif alpr_detector is not None:
+            logger.info("Using FastALPR detector for vehicle detection (YOLO not available)")
+        else:
+            logger.info("No YOLO model available, will use fallback vehicle detection")
         
         # Image preprocessing
         self.transform = transforms.Compose([
@@ -62,6 +92,147 @@ class VehicleRecognizer:
         except Exception as e:
             logger.error(f"Failed to load vehicle recognition model: {e}")
             self.enabled = False
+    
+    def detect_vehicles(self, image: np.ndarray) -> List[Tuple[int, int, int, int, float]]:
+        """
+        Detect all vehicles in the image and return bounding boxes.
+        
+        Args:
+            image: OpenCV image (BGR format)
+            
+        Returns:
+            List of tuples (x1, y1, x2, y2, confidence) for each detected vehicle
+        """
+        vehicles = []
+        
+        # Try YOLO first (best for general vehicle detection)
+        if self.yolo_model is not None:
+            try:
+                # Run YOLO detection
+                results = self.yolo_model(image, verbose=False)
+                
+                # Vehicle class IDs in COCO dataset:
+                # 2: car, 3: motorcycle, 5: bus, 7: truck
+                vehicle_classes = {2, 3, 5, 7}
+                
+                for result in results:
+                    boxes = result.boxes
+                    for box in boxes:
+                        cls = int(box.cls[0])
+                        if cls in vehicle_classes:
+                            conf = float(box.conf[0])
+                            if conf > 0.3:  # Confidence threshold
+                                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                                vehicles.append((x1, y1, x2, y2, conf))
+                
+                logger.debug(f"YOLO detected {len(vehicles)} vehicles")
+                return vehicles
+                
+            except Exception as e:
+                logger.error(f"Error in YOLO detection: {e}")
+        
+        # Try using ALPR detector as backup (can detect regions with objects)
+        if self.alpr_detector is not None and not vehicles:
+            try:
+                logger.debug("Trying ALPR detector for vehicle region estimation...")
+                # The ALPR detector might detect the vehicle region even if it's looking for plates
+                # We can use the detections to estimate vehicle bounding boxes
+                detections = self.alpr_detector.predict(image)
+                
+                if detections:
+                    # If we have plate detections, expand the bounding box to estimate vehicle region
+                    # Typically, a plate is about 1/10th the width of a vehicle
+                    for det in detections:
+                        bbox = det.bounding_box
+                        plate_w = bbox.x2 - bbox.x1
+                        plate_h = bbox.y2 - bbox.y1
+                        
+                        # Estimate vehicle bounding box (rough heuristic)
+                        # Vehicle is typically 10x wider and 4x taller than plate
+                        vehicle_w = plate_w * 10
+                        vehicle_h = plate_h * 4
+                        
+                        # Center the vehicle box around the plate
+                        center_x = (bbox.x1 + bbox.x2) / 2
+                        center_y = (bbox.y1 + bbox.y2) / 2
+                        
+                        x1 = max(0, int(center_x - vehicle_w / 2))
+                        y1 = max(0, int(center_y - vehicle_h / 2))
+                        x2 = min(image.shape[1], int(center_x + vehicle_w / 2))
+                        y2 = min(image.shape[0], int(center_y + vehicle_h / 2))
+                        
+                        vehicles.append((x1, y1, x2, y2, det.confidence))
+                    
+                    logger.debug(f"Estimated {len(vehicles)} vehicle regions from ALPR detector")
+                    return vehicles
+            except Exception as e:
+                logger.debug(f"Could not use ALPR detector for vehicle detection: {e}")
+        
+        # Fallback: Use simple image analysis to estimate vehicle region
+        # Assume the largest object in the center is the vehicle
+        return self._detect_vehicle_fallback(image)
+    
+    def _detect_vehicle_fallback(self, image: np.ndarray) -> List[Tuple[int, int, int, int, float]]:
+        """
+        Fallback vehicle detection using simple CV when YOLO is not available.
+        Assumes vehicle occupies center portion of frame.
+        
+        Args:
+            image: OpenCV image (BGR format)
+            
+        Returns:
+            List with single bounding box for estimated vehicle region
+        """
+        height, width = image.shape[:2]
+        
+        # Assume vehicle is in the center 60% of the frame
+        # This is reasonable for camera-triggered events
+        margin_x = int(width * 0.2)
+        margin_y = int(height * 0.2)
+        
+        x1 = margin_x
+        y1 = margin_y
+        x2 = width - margin_x
+        y2 = height - margin_y
+        
+        logger.debug("Using fallback vehicle detection (center crop)")
+        return [(x1, y1, x2, y2, 0.5)]
+    
+    def get_primary_vehicle_crop(self, image: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[Tuple[int, int, int, int]]]:
+        """
+        Get the crop of the primary (largest/most confident) vehicle.
+        
+        Args:
+            image: OpenCV image (BGR format)
+            
+        Returns:
+            Tuple of (cropped_image, bbox) where bbox is (x1, y1, x2, y2)
+            Returns (None, None) if no vehicle detected
+        """
+        vehicles = self.detect_vehicles(image)
+        
+        if not vehicles:
+            logger.warning("No vehicles detected in image")
+            return None, None
+        
+        # Select the primary vehicle (largest area * confidence)
+        primary_vehicle = max(vehicles, key=lambda v: (v[2] - v[0]) * (v[3] - v[1]) * v[4])
+        
+        x1, y1, x2, y2, conf = primary_vehicle
+        
+        # Ensure coordinates are within image bounds
+        height, width = image.shape[:2]
+        x1 = max(0, x1)
+        y1 = max(0, y1)
+        x2 = min(width, x2)
+        y2 = min(height, y2)
+        
+        # Crop the vehicle
+        vehicle_crop = image[y1:y2, x1:x2].copy()
+        
+        logger.debug(f"Primary vehicle crop: {x2-x1}x{y2-y1} (conf: {conf:.2f})")
+        
+        return vehicle_crop, (x1, y1, x2, y2)
     
     def recognize_vehicle(self, image: np.ndarray) -> Dict[str, str]:
         """

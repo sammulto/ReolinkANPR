@@ -27,6 +27,7 @@ class Database:
                     confidence REAL,
                     image_path TEXT,
                     plate_crop_path TEXT,
+                    vehicle_crop_path TEXT,
                     box_coordinates TEXT,
                     frame_count INTEGER DEFAULT 1,
                     vehicle_color TEXT,
@@ -78,6 +79,10 @@ class Database:
                 logger.info("Adding vehicle_confidence column to database...")
                 await db.execute('ALTER TABLE events ADD COLUMN vehicle_confidence REAL')
             
+            if 'vehicle_crop_path' not in column_names:
+                logger.info("Adding vehicle_crop_path column to database...")
+                await db.execute('ALTER TABLE events ADD COLUMN vehicle_crop_path TEXT')
+            
             await db.commit()
             logger.info("Database migration completed successfully")
             
@@ -128,15 +133,16 @@ class Database:
             # No duplicate found - insert new event
             cursor = await db.execute('''
                 INSERT INTO events
-                (plate_number, confidence, image_path, plate_crop_path,
+                (plate_number, confidence, image_path, plate_crop_path, vehicle_crop_path,
                  box_coordinates, frame_count, vehicle_color, vehicle_make, 
                  vehicle_model, vehicle_confidence)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 plate_number,
                 event_data.get('confidence'),
                 event_data.get('image_path'),
                 event_data.get('plate_crop_path'),
+                event_data.get('vehicle_crop_path'),
                 json.dumps(event_data.get('box_coordinates', {})),
                 event_data.get('frame_count', 1),
                 event_data.get('vehicle_color'),

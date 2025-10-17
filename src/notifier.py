@@ -46,6 +46,7 @@ class Notifier:
         plate_number: str, 
         confidence: float, 
         image_path: Optional[str] = None,
+        plate_crop_path: Optional[str] = None,
         vehicle_color: Optional[str] = None,
         vehicle_make: Optional[str] = None,
         vehicle_model: Optional[str] = None
@@ -80,7 +81,7 @@ class Notifier:
         # Send to Telegram
         if self.telegram_enabled and self.telegram_token and self.telegram_chat_id:
             logger.debug("Sending to Telegram...")
-            await self._send_to_telegram(message, image_path)
+            await self._send_to_telegram(message, image_path, plate_crop_path)
         
         if not self.ha_enabled and not self.telegram_enabled:
             logger.warning("Notifications enabled but no services configured!")
@@ -134,12 +135,59 @@ class Notifier:
         except Exception as e:
             logger.error(f"Failed to send to Home Assistant: {e}")
 
-    async def _send_to_telegram(self, message: str, image_path: Optional[str]):
-        """Send message to Telegram with optional image."""
+    async def _send_to_telegram(self, message: str, image_path: Optional[str], plate_crop_path: Optional[str] = None):
+        """Send message to Telegram with optional image and plate crop."""
         try:
             async with aiohttp.ClientSession() as session:
-                # If we have an image, send as photo with caption
-                if image_path and Path(image_path).exists():
+                # Check if both images exist
+                has_vehicle_image = image_path and Path(image_path).exists()
+                has_plate_crop = plate_crop_path and Path(plate_crop_path).exists()
+                
+                # If we have both vehicle image and plate crop, send as media group
+                if has_vehicle_image and has_plate_crop:
+                    url = f"https://api.telegram.org/bot{self.telegram_token}/sendMediaGroup"
+                    
+                    # Read both image files
+                    with open(image_path, 'rb') as vehicle_img:
+                        with open(plate_crop_path, 'rb') as plate_img:
+                            vehicle_data = vehicle_img.read()
+                            plate_data = plate_img.read()
+                            
+                            form = aiohttp.FormData()
+                            form.add_field('chat_id', self.telegram_chat_id)
+                            
+                            # Add vehicle image with caption
+                            form.add_field('vehicle_photo', vehicle_data, filename='vehicle.jpg', content_type='image/jpeg')
+                            
+                            # Add plate crop
+                            form.add_field('plate_photo', plate_data, filename='plate.jpg', content_type='image/jpeg')
+                            
+                            # Build media array
+                            media = [
+                                {
+                                    'type': 'photo',
+                                    'media': 'attach://vehicle_photo',
+                                    'caption': message
+                                },
+                                {
+                                    'type': 'photo',
+                                    'media': 'attach://plate_photo',
+                                    'caption': 'License Plate Crop'
+                                }
+                            ]
+                            
+                            import json
+                            form.add_field('media', json.dumps(media), content_type='application/json')
+                            
+                            async with session.post(url, data=form, timeout=30) as response:
+                                if response.status == 200:
+                                    logger.info(f"Sent media group to Telegram: {message}")
+                                else:
+                                    response_text = await response.text()
+                                    logger.warning(f"Telegram media group returned status {response.status}: {response_text}")
+                
+                # If we have vehicle image but no plate crop, send single photo with caption
+                elif has_vehicle_image:
                     url = f"https://api.telegram.org/bot{self.telegram_token}/sendPhoto"
                     
                     # Read image file
@@ -178,7 +226,7 @@ class Notifier:
         
         if service in ['telegram', 'all'] and self.telegram_enabled:
             logger.info("Sending test to Telegram...")
-            await self._send_to_telegram(test_message, None)
+            await self._send_to_telegram(test_message, None, None)
             return True
         
         if service in ['home_assistant', 'all'] and self.ha_enabled:

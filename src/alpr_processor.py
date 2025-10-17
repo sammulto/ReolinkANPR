@@ -36,7 +36,8 @@ class ALPRProcessor:
         # Initialize vehicle recognizer
         try:
             if config.vehicle_recognition_enabled:
-                self.vehicle_recognizer = VehicleRecognizer(config)
+                # Pass the ALPR detector to vehicle recognizer for potential reuse
+                self.vehicle_recognizer = VehicleRecognizer(config, alpr_detector=self.alpr.detector)
                 if self.vehicle_recognizer.enabled:
                     logger.info("Vehicle recognition enabled")
                 else:
@@ -174,10 +175,29 @@ class ALPRProcessor:
 
             # Recognize vehicle attributes (color, make, model)
             vehicle_attrs = {'color': 'unknown', 'make': 'unknown', 'model': 'unknown', 'confidence': 0.0}
+            vehicle_crop_filename = None
+            
             if self.vehicle_recognizer and self.vehicle_recognizer.enabled:
                 try:
                     logger.info("Recognizing vehicle attributes...")
-                    vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(best_image)
+                    
+                    # Get vehicle crop first
+                    vehicle_crop, vehicle_bbox = self.vehicle_recognizer.get_primary_vehicle_crop(best_image)
+                    
+                    if vehicle_crop is not None:
+                        # Save vehicle crop
+                        vehicle_crop_filename = f"{timestamp}_{best_result.ocr.text.upper().replace(' ', '')}_vehicle.jpg"
+                        vehicle_crop_path = save_dir / "images" / vehicle_crop_filename
+                        cv2.imwrite(str(vehicle_crop_path), vehicle_crop)
+                        logger.info(f"Saved vehicle crop: {vehicle_crop_filename}")
+                        
+                        # Recognize attributes from the cropped vehicle
+                        vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(vehicle_crop)
+                    else:
+                        # Fallback: recognize from full image
+                        logger.warning("No vehicle crop available, using full image")
+                        vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(best_image)
+                    
                     logger.info(f"Vehicle: {vehicle_attrs['color']} {vehicle_attrs['make']} {vehicle_attrs['model']}")
                 except Exception as e:
                     logger.error(f"Error during vehicle recognition: {e}")
@@ -187,6 +207,7 @@ class ALPRProcessor:
                 'confidence': best_result.ocr.confidence,
                 'image_path': f"images/{image_filename}",
                 'plate_crop_path': f"images/{crop_filename}",
+                'vehicle_crop_path': f"images/{vehicle_crop_filename}" if vehicle_crop_filename else None,
                 'box_coordinates': {
                     'xmin': bbox.x1,
                     'ymin': bbox.y1,
@@ -232,8 +253,14 @@ class ALPRProcessor:
                 logger.warning("Failed to decode frame for vehicle-only processing")
                 return None
             
-            # Recognize vehicle attributes
-            vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(img)
+            # Get vehicle crop
+            vehicle_crop, vehicle_bbox = self.vehicle_recognizer.get_primary_vehicle_crop(img)
+            
+            # Recognize vehicle attributes (use crop if available, otherwise full image)
+            if vehicle_crop is not None:
+                vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(vehicle_crop)
+            else:
+                vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(img)
             
             if vehicle_attrs['color'] == 'unknown' and vehicle_attrs['make'] == 'unknown':
                 logger.info("No vehicle attributes detected")
@@ -250,11 +277,20 @@ class ALPRProcessor:
             image_path.parent.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(str(image_path), img)
             
+            # Save vehicle crop if available
+            vehicle_crop_filename = None
+            if vehicle_crop is not None:
+                vehicle_crop_filename = f"{timestamp}_NO_PLATE_{vehicle_desc}_vehicle.jpg"
+                vehicle_crop_path = save_dir / "images" / vehicle_crop_filename
+                cv2.imwrite(str(vehicle_crop_path), vehicle_crop)
+                logger.info(f"Saved vehicle crop: {vehicle_crop_filename}")
+            
             return {
                 'plate_number': 'NO_PLATE',
                 'confidence': 0.0,
                 'image_path': f"images/{image_filename}",
                 'plate_crop_path': None,
+                'vehicle_crop_path': f"images/{vehicle_crop_filename}" if vehicle_crop_filename else None,
                 'box_coordinates': {},
                 'frame_count': len(frame_bytes_list),
                 'vehicle_color': vehicle_attrs['color'],

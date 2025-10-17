@@ -289,15 +289,20 @@ class ANPRService:
                 
                 # Send notifications (only if it was actually saved, not a duplicate)
                 if event_id:
-                    # Convert relative image path to absolute for notifications
+                    # Convert relative image paths to absolute for notifications
                     image_path = result.get('image_path')
                     if image_path:
                         image_path = str(save_dir / image_path)
+                    
+                    plate_crop_path = result.get('plate_crop_path')
+                    if plate_crop_path:
+                        plate_crop_path = str(save_dir / plate_crop_path)
                     
                     await self.notifier.send_detection(
                         result['plate_number'],
                         result.get('confidence', 0.0),
                         image_path,
+                        plate_crop_path,
                         result.get('vehicle_color'),
                         result.get('vehicle_make'),
                         result.get('vehicle_model')
