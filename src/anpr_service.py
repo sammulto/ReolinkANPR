@@ -296,8 +296,11 @@ class ANPRService:
                     
                     await self.notifier.send_detection(
                         result['plate_number'],
-                        result['confidence'],
-                        image_path
+                        result.get('confidence', 0.0),
+                        image_path,
+                        result.get('vehicle_color'),
+                        result.get('vehicle_make'),
+                        result.get('vehicle_model')
                     )
             else:
                 logger.info("No valid plates found in frames")

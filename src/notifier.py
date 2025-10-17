@@ -41,7 +41,15 @@ class Notifier:
         else:
             logger.info("Notifications: not configured")
 
-    async def send_detection(self, plate_number: str, confidence: float, image_path: Optional[str] = None):
+    async def send_detection(
+        self, 
+        plate_number: str, 
+        confidence: float, 
+        image_path: Optional[str] = None,
+        vehicle_color: Optional[str] = None,
+        vehicle_make: Optional[str] = None,
+        vehicle_model: Optional[str] = None
+    ):
         """Send notification when a plate is detected."""
         logger.debug(f"send_detection called: enabled={self.enabled}, plate={plate_number}")
         
@@ -49,12 +57,25 @@ class Notifier:
             logger.debug("Notifications disabled - skipping")
             return
         
-        message = f"🚗 Plate Detected: {plate_number} ({confidence:.1%} confidence)"
+        # Build message with vehicle info
+        if plate_number == 'NO_PLATE':
+            # Vehicle-only detection
+            vehicle_desc = self._format_vehicle_description(vehicle_color, vehicle_make, vehicle_model)
+            message = f"🚗 Vehicle Detected (No Plate)\n{vehicle_desc}"
+        else:
+            # Normal plate detection with vehicle info
+            vehicle_desc = self._format_vehicle_description(vehicle_color, vehicle_make, vehicle_model)
+            message = f"🚗 Plate Detected: {plate_number}\n📊 Confidence: {confidence:.1%}"
+            if vehicle_desc:
+                message += f"\n{vehicle_desc}"
         
         # Send to Home Assistant
         if self.ha_enabled and self.ha_webhook:
             logger.debug("Sending to Home Assistant...")
-            await self._send_to_home_assistant(plate_number, confidence, image_path)
+            await self._send_to_home_assistant(
+                plate_number, confidence, image_path,
+                vehicle_color, vehicle_make, vehicle_model
+            )
         
         # Send to Telegram
         if self.telegram_enabled and self.telegram_token and self.telegram_chat_id:
@@ -64,18 +85,50 @@ class Notifier:
         if not self.ha_enabled and not self.telegram_enabled:
             logger.warning("Notifications enabled but no services configured!")
 
-    async def _send_to_home_assistant(self, plate_number: str, confidence: float, image_path: Optional[str]):
+    def _format_vehicle_description(
+        self, 
+        color: Optional[str], 
+        make: Optional[str], 
+        model: Optional[str]
+    ) -> str:
+        """Format vehicle description for notifications."""
+        parts = []
+        
+        if color and color != 'unknown':
+            parts.append(f"🎨 {color.capitalize()}")
+        
+        if make and make != 'unknown':
+            parts.append(f"🏭 {make.capitalize()}")
+        
+        if model and model != 'unknown':
+            parts.append(f"🚙 {model.capitalize()}")
+        
+        return " | ".join(parts) if parts else ""
+
+    async def _send_to_home_assistant(
+        self, 
+        plate_number: str, 
+        confidence: float, 
+        image_path: Optional[str],
+        vehicle_color: Optional[str] = None,
+        vehicle_make: Optional[str] = None,
+        vehicle_model: Optional[str] = None
+    ):
         """Send webhook to Home Assistant."""
         try:
             async with aiohttp.ClientSession() as session:
                 data = {
                     'plate_number': plate_number,
                     'confidence': confidence,
-                    'image_path': image_path
+                    'image_path': image_path,
+                    'vehicle_color': vehicle_color or 'unknown',
+                    'vehicle_make': vehicle_make or 'unknown',
+                    'vehicle_model': vehicle_model or 'unknown'
                 }
                 async with session.post(self.ha_webhook, json=data, timeout=5) as response:
                     if response.status == 200:
-                        logger.info(f"Sent to Home Assistant: {plate_number}")
+                        vehicle_info = f"{vehicle_color} {vehicle_make} {vehicle_model}".strip()
+                        logger.info(f"Sent to Home Assistant: {plate_number} ({vehicle_info})")
                     else:
                         logger.warning(f"Home Assistant returned status {response.status}")
         except Exception as e:
