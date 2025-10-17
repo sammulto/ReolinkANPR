@@ -157,8 +157,11 @@ class Notifier:
                 has_full_image = full_image_path and Path(full_image_path).exists()
                 has_plate_crop = plate_crop_path and Path(plate_crop_path).exists()
                 
+                # Count available images
+                image_count = int(has_vehicle_crop) + int(has_full_image) + int(has_plate_crop)
+                
                 # If we have multiple images, send as media group
-                if (has_vehicle_crop or has_full_image) and (has_vehicle_crop + has_full_image + has_plate_crop >= 2):
+                if image_count >= 2:
                     url = f"https://api.telegram.org/bot{self.telegram_token}/sendMediaGroup"
                     
                     form = aiohttp.FormData()
