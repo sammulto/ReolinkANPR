@@ -61,8 +61,12 @@ ReolinkANPR now includes advanced vehicle recognition capabilities powered by de
 
 ### What It Detects
 - **Vehicle Color** - Black, White, Silver, Gray, Red, Blue, Green, Yellow, Orange, Brown, Gold, Cyan, Purple, Pink
-- **Vehicle Make** - Toyota, Ford, Honda, Chevrolet, BMW, Mercedes, etc.
-- **Vehicle Model** - Sedan, SUV, Truck, etc.
+  - Uses advanced HSV histogram analysis with shadow/reflection filtering
+  - Multi-region sampling for accurate color detection
+- **Vehicle Make & Model** - Powered by CompCars dataset (optional)
+  - Supports fine-tuned models for 200+ car models
+  - Returns 'unknown' if model not provided (color detection still works)
+  - See [COMPCARS_SETUP.md](COMPCARS_SETUP.md) for setup instructions
 - **Vehicle Location** - YOLOv9 detects and crops individual vehicles from multi-vehicle scenes
 
 ### Key Features

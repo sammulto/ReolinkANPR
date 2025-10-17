@@ -80,17 +80,161 @@ class VehicleRecognizer:
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
         
+        # Initialize classification model
+        self.classifier_model = None
+        self.class_labels = None
+        
         try:
-            # Use ResNet50 as feature extractor
-            logger.info("Loading vehicle recognition model...")
-            self.model = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1)
-            self.model = self.model.to(self.device)
-            self.model.eval()
-            logger.info(f"Vehicle recognition model loaded on {self.device}")
+            # Try to load fine-tuned CompCars model
+            model_path = 'models/compcars_resnet50.pth'
+            if self._load_compcars_model(model_path):
+                logger.info(f"Loaded CompCars fine-tuned model from {model_path}")
+            else:
+                logger.warning("CompCars model not found. Make/model detection will return 'unknown'")
+                
+                # Offer to download automatically
+                if self._should_auto_download():
+                    logger.info("Attempting to download pre-trained CompCars model...")
+                    if self._auto_download_model():
+                        logger.info("Model downloaded successfully! Reloading...")
+                        if self._load_compcars_model(model_path):
+                            logger.info("✓ CompCars model loaded after download")
+                        else:
+                            logger.warning("Failed to load downloaded model")
+                    else:
+                        self._show_manual_instructions()
+                else:
+                    self._show_manual_instructions()
         except Exception as e:
-            logger.error(f"Failed to load vehicle recognition model: {e}")
-            self.enabled = False
+            logger.error(f"Failed to load vehicle classification model: {e}")
+            self.classifier_model = None
     
+    def _should_auto_download(self) -> bool:
+        """
+        Check if we should attempt auto-download of model.
+        
+        Returns:
+            True if auto-download should be attempted
+        """
+        # Check config setting if available
+        if self.config and hasattr(self.config, '_config'):
+            auto_download = self.config._config.get('alpr', {}).get('auto_download_vehicle_model', True)
+            return auto_download
+        
+        # Default: allow auto-download
+        return True
+    
+    def _show_manual_instructions(self):
+        """Show instructions for manual model setup."""
+        logger.info("To enable make/model detection:")
+        logger.info("  1. Run: python -m src.download_model")
+        logger.info("  2. Or manually place model at: models/compcars_resnet50.pth")
+        logger.info("  3. Place class labels at: models/compcars_labels.txt")
+        logger.info("  See COMPCARS_SETUP.md for details")
+    
+    def _auto_download_model(self) -> bool:
+        """
+        Automatically download pre-trained CompCars model.
+        
+        Returns:
+            True if download successful, False otherwise
+        """
+        try:
+            from pathlib import Path
+            import urllib.request
+            import json
+            
+            model_dir = Path('models')
+            model_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Try to download from a pre-configured source
+            # Option 1: GitHub Release
+            github_config = {
+                'owner': 'your-username',  # Replace with actual repo
+                'repo': 'compcars-models',
+                'release': 'latest',
+                'weights_file': 'compcars_resnet50.pth',
+                'labels_file': 'compcars_labels.txt'
+            }
+            
+            # For now, we'll use a placeholder approach
+            # In production, replace with actual model hosting
+            logger.warning("Auto-download not configured yet")
+            logger.info("Please use one of these methods:")
+            logger.info("  1. Run: python -m src.download_model --method github")
+            logger.info("  2. Download manually from your model repository")
+            logger.info("  3. Train your own model using COMPCARS_SETUP.md")
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Auto-download failed: {e}")
+            return False
+
+    def _load_compcars_model(self, model_path: str) -> bool:
+        """
+        Load a fine-tuned CompCars classification model.
+        
+        Args:
+            model_path: Path to the saved model weights
+            
+        Returns:
+            True if model loaded successfully, False otherwise
+        """
+        try:
+            from pathlib import Path
+            
+            model_file = Path(model_path)
+            labels_file = Path('models/compcars_labels.txt')
+            
+            if not model_file.exists():
+                logger.debug(f"Model file not found: {model_path}")
+                return False
+            
+            if not labels_file.exists():
+                logger.debug(f"Labels file not found: {labels_file}")
+                return False
+            
+            # Load class labels
+            with open(labels_file, 'r', encoding='utf-8') as f:
+                self.class_labels = [line.strip() for line in f.readlines()]
+            
+            num_classes = len(self.class_labels)
+            logger.info(f"Loaded {num_classes} vehicle classes from CompCars")
+            
+            # Create model with correct number of output classes
+            self.classifier_model = torchvision.models.resnet50(weights=None)
+            
+            # Modify the final layer to match CompCars classes
+            num_features = self.classifier_model.fc.in_features
+            self.classifier_model.fc = torch.nn.Linear(num_features, num_classes)
+            
+            # Load trained weights
+            checkpoint = torch.load(model_file, map_location=self.device)
+            
+            # Handle different checkpoint formats
+            if isinstance(checkpoint, dict):
+                if 'model_state_dict' in checkpoint:
+                    self.classifier_model.load_state_dict(checkpoint['model_state_dict'])
+                elif 'state_dict' in checkpoint:
+                    self.classifier_model.load_state_dict(checkpoint['state_dict'])
+                else:
+                    self.classifier_model.load_state_dict(checkpoint)
+            else:
+                self.classifier_model.load_state_dict(checkpoint)
+            
+            self.classifier_model = self.classifier_model.to(self.device)
+            self.classifier_model.eval()
+            
+            logger.info(f"CompCars model loaded successfully with {num_classes} classes")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to load CompCars model: {e}")
+            self.classifier_model = None
+            self.class_labels = None
+            return False
+
     def detect_vehicles(self, image: np.ndarray) -> List[Tuple[int, int, int, int, float]]:
         """
         Detect all vehicles in the image and return bounding boxes.
@@ -406,11 +550,7 @@ class VehicleRecognizer:
     
     def _classify_vehicle(self, image: np.ndarray) -> tuple[str, str]:
         """
-        Classify vehicle make and model using deep learning.
-        
-        Note: This is a simplified implementation using ImageNet features.
-        For production, use a model specifically trained on vehicle classification
-        like Stanford Cars dataset or CompCars dataset.
+        Classify vehicle make and model using CompCars fine-tuned model.
         
         Args:
             image: OpenCV image (BGR format)
@@ -418,6 +558,10 @@ class VehicleRecognizer:
         Returns:
             Tuple of (make, model)
         """
+        # Check if CompCars model is loaded
+        if self.classifier_model is None or self.class_labels is None:
+            return 'unknown', 'unknown'
+        
         try:
             # Convert BGR to RGB
             rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -426,37 +570,38 @@ class VehicleRecognizer:
             # Preprocess
             input_tensor = self.transform(pil_image).unsqueeze(0).to(self.device)
             
-            # Extract features (we're not actually classifying make/model here,
-            # as ResNet is trained on ImageNet, not vehicles specifically)
+            # Run inference
             with torch.no_grad():
-                features = self.model(input_tensor)
+                outputs = self.classifier_model(input_tensor)
+                probabilities = torch.nn.functional.softmax(outputs, dim=1)
+                confidence, predicted_idx = torch.max(probabilities, 1)
             
-            # For now, return placeholder values
-            # In production, you would:
-            # 1. Fine-tune a model on vehicle datasets (Stanford Cars, CompCars, etc.)
-            # 2. Use a pre-trained vehicle classification model
-            # 3. Or use an API service like Google Vision API, AWS Rekognition
+            # Get predicted class
+            class_idx = predicted_idx.item()
+            confidence_score = confidence.item()
             
-            # Simplified heuristic based on image features
-            # This is just a placeholder - not actual make/model detection
-            feature_sum = features.sum().item()
-            
-            # Pseudo-random selection based on feature sum (for demonstration)
-            # In production, replace with actual classification
-            make_idx = int(abs(feature_sum) % len(self.MAKES))
-            make = self.MAKES[make_idx]
-            
-            # Model detection would require specific training data
-            model = 'sedan'  # Placeholder
-            
-            # TODO: Integrate actual vehicle classification model
-            # Recommended approaches:
-            # 1. Use MMClassification with vehicle-specific models
-            # 2. Fine-tune EfficientNet on Stanford Cars dataset
-            # 3. Use commercial APIs (Google Vision, AWS Rekognition)
-            
-            logger.debug(f"Classified vehicle as {make} {model} (placeholder)")
-            return make, model
+            if class_idx < len(self.class_labels):
+                predicted_class = self.class_labels[class_idx]
+                
+                # Parse class name (CompCars format: "make_model_year" or "make model")
+                # Example: "Audi_A4_Sedan_2012" or "Toyota Camry"
+                parts = predicted_class.replace('_', ' ').split()
+                
+                if len(parts) >= 2:
+                    make = parts[0].lower()
+                    model = ' '.join(parts[1:]).lower()
+                    # Remove year if present (typically 4 digits at the end)
+                    if model.split()[-1].isdigit() and len(model.split()[-1]) == 4:
+                        model = ' '.join(model.split()[:-1])
+                    
+                    logger.debug(f"Classified as {make} {model} (confidence: {confidence_score:.2f})")
+                    return make, model
+                else:
+                    logger.debug(f"Could not parse class name: {predicted_class}")
+                    return 'unknown', 'unknown'
+            else:
+                logger.error(f"Predicted index {class_idx} out of range")
+                return 'unknown', 'unknown'
             
         except Exception as e:
             logger.error(f"Error classifying vehicle: {e}")
