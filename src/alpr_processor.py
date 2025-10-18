@@ -54,23 +54,135 @@ class ALPRProcessor:
         self,
         frame_bytes_list: List[bytes],
         save_dir: Path
-    ) -> Optional[Dict]:
+    ) -> Optional[List[Dict]]:
         """
-        Process multiple frames and return the best result.
+        Process multiple frames and return results for all vehicles.
+        Each vehicle gets its own plate detection.
 
         Args:
             frame_bytes_list: List of frame bytes to process
             save_dir: Directory to save images
 
         Returns:
-            Dict with plate info and paths, or None if no plate found
+            List of dicts with plate info and paths for each vehicle, or None if no vehicles/plates found
         """
         if not frame_bytes_list:
             logger.warning("No frames provided for processing")
             return None
 
-        logger.info(f"Processing {len(frame_bytes_list)} frames...")
+        logger.info(f"Processing {len(frame_bytes_list)} frames for multiple vehicles...")
 
+        # Step 1: Track all vehicles across frames
+        if not self.vehicle_recognizer or not self.vehicle_recognizer.enabled:
+            # Fallback to old logic if vehicle recognition is disabled
+            return self._process_frames_legacy(frame_bytes_list, save_dir)
+        
+        vehicle_tracks = self._track_vehicles_across_frames(frame_bytes_list)
+        
+        if not vehicle_tracks:
+            logger.info("No vehicles detected in any frame")
+            if self.config.vehicle_only_detection_enabled:
+                return None
+            # Fallback to frame-level plate detection
+            return self._process_frames_legacy(frame_bytes_list, save_dir)
+        
+        logger.info(f"Found {len(vehicle_tracks)} unique vehicles across frames")
+        
+        # Step 2: For each vehicle track, find the best plate detection
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        results = []
+        
+        for vehicle_idx, track in enumerate(vehicle_tracks, 1):
+            logger.info(f"Processing vehicle {vehicle_idx}/{len(vehicle_tracks)}...")
+            
+            # Find best plate for this vehicle across all its detections
+            best_plate = self._find_best_plate_for_vehicle(track, frame_bytes_list)
+            
+            # Aggregate vehicle attributes across detections
+            aggregated_vehicle = self._aggregate_vehicle_results(track['detections'])
+            
+            if best_plate:
+                # Vehicle with plate detected
+                logger.info(f"Vehicle {vehicle_idx}: {best_plate['plate_text']} "
+                          f"(plate conf: {best_plate['confidence']:.3f}, "
+                          f"vehicle: {aggregated_vehicle['color']} {aggregated_vehicle['make']} {aggregated_vehicle['model']})")
+                
+                # Save images
+                image_filename = f"{timestamp}_{best_plate['plate_text']}_vehicle_{vehicle_idx}.jpg"
+                crop_filename = f"{timestamp}_{best_plate['plate_text']}_crop_{vehicle_idx}.jpg"
+                vehicle_crop_filename = f"{timestamp}_{best_plate['plate_text']}_vehicle_crop_{vehicle_idx}.jpg"
+                
+                image_path = save_dir / "images" / image_filename
+                crop_path = save_dir / "images" / crop_filename
+                vehicle_crop_path = save_dir / "images" / vehicle_crop_filename
+                
+                image_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                cv2.imwrite(str(image_path), best_plate['full_image'])
+                cv2.imwrite(str(crop_path), best_plate['plate_crop'])
+                cv2.imwrite(str(vehicle_crop_path), track['best_detection']['crop'])
+                
+                results.append({
+                    'plate_number': best_plate['plate_text'],
+                    'confidence': best_plate['confidence'],
+                    'image_path': f"images/{image_filename}",
+                    'plate_crop_path': f"images/{crop_filename}",
+                    'vehicle_crop_path': f"images/{vehicle_crop_filename}",
+                    'box_coordinates': best_plate['bbox'],
+                    'frame_count': len(frame_bytes_list),
+                    'vehicle_color': aggregated_vehicle['color'],
+                    'vehicle_make': aggregated_vehicle['make'],
+                    'vehicle_model': aggregated_vehicle['model'],
+                    'vehicle_confidence': aggregated_vehicle['confidence'],
+                    'vehicle_bbox': track['best_detection']['bbox']
+                })
+            else:
+                # Vehicle without plate (vehicle-only detection)
+                logger.info(f"Vehicle {vehicle_idx}: No plate detected "
+                          f"(vehicle: {aggregated_vehicle['color']} {aggregated_vehicle['make']} {aggregated_vehicle['model']})")
+                
+                if self.config.vehicle_only_detection_enabled:
+                    # Save images for vehicle-only detection
+                    vehicle_desc = f"{aggregated_vehicle['color']}_{aggregated_vehicle['make']}"
+                    image_filename = f"{timestamp}_NO_PLATE_{vehicle_desc}_vehicle_{vehicle_idx}.jpg"
+                    vehicle_crop_filename = f"{timestamp}_NO_PLATE_{vehicle_desc}_crop_{vehicle_idx}.jpg"
+                    
+                    image_path = save_dir / "images" / image_filename
+                    vehicle_crop_path = save_dir / "images" / vehicle_crop_filename
+                    
+                    image_path.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    # Use best detection frame for full image
+                    best_det = track['best_detection']
+                    cv2.imwrite(str(image_path), track['best_frame_img'])
+                    cv2.imwrite(str(vehicle_crop_path), best_det['crop'])
+                    
+                    results.append({
+                        'plate_number': 'NO_PLATE',
+                        'confidence': 0.0,
+                        'image_path': f"images/{image_filename}",
+                        'plate_crop_path': None,
+                        'vehicle_crop_path': f"images/{vehicle_crop_filename}",
+                        'box_coordinates': {},
+                        'frame_count': len(frame_bytes_list),
+                        'vehicle_color': aggregated_vehicle['color'],
+                        'vehicle_make': aggregated_vehicle['make'],
+                        'vehicle_model': aggregated_vehicle['model'],
+                        'vehicle_confidence': aggregated_vehicle['confidence'],
+                        'vehicle_bbox': best_det['bbox']
+                    })
+        
+        return results if results else None
+    
+    def _process_frames_legacy(
+        self,
+        frame_bytes_list: List[bytes],
+        save_dir: Path
+    ) -> Optional[List[Dict]]:
+        """
+        Legacy frame-level processing (original logic wrapped in list for compatibility).
+        Used when vehicle recognition is disabled.
+        """
         best_result = None
         best_confidence = 0.0
         best_image = None
@@ -211,7 +323,8 @@ class ALPRProcessor:
                 'confidence': 0.0
             }
 
-            return {
+            # Wrap in list for consistency with new multi-vehicle API
+            return [{
                 'plate_number': best_result.ocr.text.upper().replace(' ', ''),
                 'confidence': best_result.ocr.confidence,
                 'image_path': f"images/{image_filename}",
@@ -229,10 +342,164 @@ class ALPRProcessor:
                 'vehicle_model': primary_vehicle['model'],
                 'vehicle_confidence': primary_vehicle['confidence'],
                 'vehicles': vehicles_data  # List of all detected vehicles
-            }
+            }]
 
         logger.info("No valid plates detected in any frame")
         return None
+
+    def _track_vehicles_across_frames(self, frame_bytes_list: List[bytes]) -> List[Dict]:
+        """
+        Track all vehicles across multiple frames.
+        
+        Args:
+            frame_bytes_list: All frames to process
+            
+        Returns:
+            List of vehicle tracks, each containing detections list and best detection
+        """
+        vehicle_tracks = []
+        
+        for frame_idx, frame_bytes in enumerate(frame_bytes_list):
+            try:
+                # Decode image
+                image_array = np.frombuffer(frame_bytes, np.uint8)
+                img = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+                
+                if img is None:
+                    continue
+                
+                # Get all vehicle crops in this frame
+                vehicle_crops = self.vehicle_recognizer.get_all_vehicle_crops(img)
+                
+                if not vehicle_crops:
+                    continue
+                
+                # Process each detected vehicle
+                for vehicle_crop, vehicle_bbox, det_conf in vehicle_crops:
+                    # Recognize vehicle attributes
+                    vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(vehicle_crop)
+                    
+                    # Try to match with existing tracks using IoU
+                    matched_track = None
+                    best_iou = 0.3  # Minimum IoU threshold
+                    
+                    for track in vehicle_tracks:
+                        last_detection = track['detections'][-1]
+                        iou = self._calculate_iou(vehicle_bbox, last_detection['bbox'])
+                        if iou > best_iou:
+                            best_iou = iou
+                            matched_track = track
+                    
+                    detection = {
+                        'frame_idx': frame_idx,
+                        'frame_img': img.copy(),
+                        'bbox': vehicle_bbox,
+                        'crop': vehicle_crop.copy(),
+                        'det_conf': det_conf,
+                        'color': vehicle_attrs['color'],
+                        'make': vehicle_attrs['make'],
+                        'model': vehicle_attrs['model'],
+                        'confidence': vehicle_attrs['confidence']
+                    }
+                    
+                    if matched_track:
+                        matched_track['detections'].append(detection)
+                        if vehicle_attrs['confidence'] > matched_track['best_confidence']:
+                            matched_track['best_confidence'] = vehicle_attrs['confidence']
+                            matched_track['best_detection'] = detection
+                            matched_track['best_frame_img'] = img.copy()
+                    else:
+                        vehicle_tracks.append({
+                            'detections': [detection],
+                            'best_confidence': vehicle_attrs['confidence'],
+                            'best_detection': detection,
+                            'best_frame_img': img.copy()
+                        })
+                
+            except Exception as e:
+                logger.debug(f"Error tracking vehicles in frame {frame_idx}: {e}")
+                continue
+        
+        return vehicle_tracks
+    
+    def _find_best_plate_for_vehicle(
+        self, 
+        vehicle_track: Dict, 
+        frame_bytes_list: List[bytes]
+    ) -> Optional[Dict]:
+        """
+        Find the best plate detection for a specific vehicle across its tracked frames.
+        
+        Args:
+            vehicle_track: Vehicle track containing detection list
+            frame_bytes_list: Original frame bytes list
+            
+        Returns:
+            Dict with plate info (plate_text, confidence, bbox, full_image, plate_crop) or None
+        """
+        best_plate = None
+        best_confidence = 0.0
+        
+        for detection in vehicle_track['detections']:
+            try:
+                # Get the vehicle crop from this detection
+                vehicle_crop = detection['crop']
+                
+                # Run ALPR on the vehicle crop
+                plate_results = self.alpr.predict(vehicle_crop)
+                
+                if not plate_results:
+                    continue
+                
+                # Process each plate found in this vehicle crop
+                for result in plate_results:
+                    plate_text = result.ocr.text.upper().replace(' ', '')
+                    ocr_confidence = result.ocr.confidence
+                    
+                    # Check confidence threshold
+                    if ocr_confidence < self.config.min_confidence:
+                        logger.debug(f"Low confidence {ocr_confidence:.3f} for {plate_text} in vehicle crop")
+                        continue
+                    
+                    logger.debug(f"Found plate {plate_text} (conf: {ocr_confidence:.3f}) in vehicle crop")
+                    
+                    # Track best plate for this vehicle
+                    if ocr_confidence > best_confidence:
+                        best_confidence = ocr_confidence
+                        
+                        # Convert plate bbox from vehicle crop coordinates to full image coordinates
+                        plate_bbox_crop = result.detection.bounding_box
+                        vehicle_bbox = detection['bbox']
+                        
+                        # Calculate plate bbox in full image coordinates
+                        plate_x1 = vehicle_bbox[0] + int(plate_bbox_crop.x1)
+                        plate_y1 = vehicle_bbox[1] + int(plate_bbox_crop.y1)
+                        plate_x2 = vehicle_bbox[0] + int(plate_bbox_crop.x2)
+                        plate_y2 = vehicle_bbox[1] + int(plate_bbox_crop.y2)
+                        
+                        # Crop plate from vehicle crop image
+                        crop_x1, crop_y1 = int(plate_bbox_crop.x1), int(plate_bbox_crop.y1)
+                        crop_x2, crop_y2 = int(plate_bbox_crop.x2), int(plate_bbox_crop.y2)
+                        plate_crop = vehicle_crop[crop_y1:crop_y2, crop_x1:crop_x2].copy()
+                        
+                        best_plate = {
+                            'plate_text': plate_text,
+                            'confidence': ocr_confidence,
+                            'bbox': {
+                                'xmin': plate_x1,
+                                'ymin': plate_y1,
+                                'xmax': plate_x2,
+                                'ymax': plate_y2
+                            },
+                            'full_image': detection['frame_img'],
+                            'plate_crop': plate_crop
+                        }
+                
+            except Exception as e:
+                logger.debug(f"Error finding plate in vehicle crop: {e}")
+                continue
+        
+        return best_plate
 
     def _sample_vehicle_recognition_multiframe(
         self,

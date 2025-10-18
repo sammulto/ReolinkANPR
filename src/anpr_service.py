@@ -272,79 +272,64 @@ class ANPRService:
         """Process vehicle detection frames through ALPR."""
 
         try:
-            # Process frames with ALPR
+            # Process frames with ALPR (now returns list of results, one per vehicle)
             save_dir = Path(self.config.database_path).parent
-            result = self.alpr.process_frames(frames, save_dir)
+            results = self.alpr.process_frames(frames, save_dir)
 
-            if result:
-                # Valid plate detected
-                logger.info(
-                    f"Plate recognized: {result['plate_number']} "
-                    f"(confidence: {result['confidence']:.2%})"
-                )
-
-                # Save to database
-                event_id = await self.database.add_event(result)
-                logger.info(f"Event saved to database (ID: {event_id})")
+            if results:
+                logger.info(f"Found {len(results)} vehicle(s) with plate/vehicle data")
                 
-                # Send notifications (only if it was actually saved, not a duplicate)
-                if event_id:
-                    # Convert relative image paths to absolute for notifications
-                    image_path = result.get('image_path')
-                    if image_path:
-                        image_path = str(save_dir / image_path)
+                # Process each vehicle separately
+                for vehicle_idx, result in enumerate(results, 1):
+                    # Log what we found
+                    logger.info(
+                        f"Vehicle {vehicle_idx}/{len(results)}: "
+                        f"Plate={result['plate_number']} "
+                        f"(conf: {result['confidence']:.2%}), "
+                        f"Vehicle={result.get('vehicle_color', 'unknown')} "
+                        f"{result.get('vehicle_make', 'unknown')} "
+                        f"{result.get('vehicle_model', 'unknown')}"
+                    )
+
+                    # Save to database (one entry per vehicle)
+                    event_id = await self.database.add_event(result)
                     
-                    plate_crop_path = result.get('plate_crop_path')
-                    if plate_crop_path:
-                        plate_crop_path = str(save_dir / plate_crop_path)
-                    
-                    # Send notifications for ALL detected vehicles
-                    vehicles = result.get('vehicles', [])
-                    
-                    if vehicles:
-                        logger.info(f"Sending notifications for {len(vehicles)} vehicle(s)")
+                    if event_id:
+                        logger.info(f"Vehicle {vehicle_idx} saved to database (ID: {event_id})")
                         
-                        for idx, vehicle in enumerate(vehicles, 1):
-                            # Convert vehicle crop path to absolute
-                            vehicle_crop_path = vehicle.get('crop_path')
-                            if vehicle_crop_path:
-                                vehicle_crop_path = str(save_dir / vehicle_crop_path)
-                            
-                            # For multiple vehicles, add vehicle number to plate
-                            plate_display = result['plate_number']
-                            if len(vehicles) > 1:
-                                plate_display = f"{result['plate_number']} (Vehicle {idx}/{len(vehicles)})"
-                            
-                            await self.notifier.send_detection(
-                                plate_display,
-                                result.get('confidence', 0.0),
-                                image_path,
-                                plate_crop_path,
-                                vehicle_crop_path,  # Pass vehicle crop path
-                                vehicle.get('color'),
-                                vehicle.get('make'),
-                                vehicle.get('model'),
-                                vehicle.get('confidence')  # Vehicle recognition confidence
-                            )
-                    else:
-                        # Fallback: send single notification with primary vehicle data
+                        # Convert relative image paths to absolute for notifications
+                        image_path = result.get('image_path')
+                        if image_path:
+                            image_path = str(save_dir / image_path)
+                        
+                        plate_crop_path = result.get('plate_crop_path')
+                        if plate_crop_path:
+                            plate_crop_path = str(save_dir / plate_crop_path)
+                        
                         vehicle_crop_path = result.get('vehicle_crop_path')
                         if vehicle_crop_path:
                             vehicle_crop_path = str(save_dir / vehicle_crop_path)
                         
+                        # Send notification for this vehicle
+                        plate_display = result['plate_number']
+                        if len(results) > 1:
+                            plate_display = f"{result['plate_number']} (Vehicle {vehicle_idx}/{len(results)})"
+                        
                         await self.notifier.send_detection(
-                            result['plate_number'],
+                            plate_display,
                             result.get('confidence', 0.0),
                             image_path,
                             plate_crop_path,
-                            vehicle_crop_path,  # Pass vehicle crop path
+                            vehicle_crop_path,
                             result.get('vehicle_color'),
                             result.get('vehicle_make'),
                             result.get('vehicle_model'),
-                            result.get('vehicle_confidence')  # Vehicle recognition confidence
+                            result.get('vehicle_confidence')
                         )
+                    else:
+                        logger.debug(f"Vehicle {vehicle_idx} was duplicate, notification skipped")
             else:
-                logger.info("No valid plates found in frames")
+                logger.info("No valid plates or vehicles found in frames")
 
         except Exception as e:
             logger.error(f"Error processing detection: {e}")
