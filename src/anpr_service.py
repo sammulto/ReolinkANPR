@@ -242,9 +242,9 @@ class ANPRService:
                 settings_result, frames = await asyncio.gather(settings_task, record_task)
                 
                 if settings_result:
-                    logger.info("✅ Before-recording settings applied during recording")
+                    logger.info("Before-recording settings applied during recording")
                 else:
-                    logger.warning("⚠️ Before-recording settings failed (recording still captured)")
+                    logger.warning("Before-recording settings failed (recording still captured)")
             else:
                 # No settings - just record
                 frames = await self.camera._record_rtsp_and_extract_frames(self.config.recording_duration)
@@ -254,9 +254,9 @@ class ANPRService:
                 logger.info("Restoring after-recording settings...")
                 success = await self.camera.apply_recording_settings('after')
                 if success:
-                    logger.info("✅ After-recording settings restored")
+                    logger.info("After-recording settings restored")
                 else:
-                    logger.warning("⚠️ After-recording settings failed")
+                    logger.warning("After-recording settings failed")
 
             # Process frames
             if frames:
