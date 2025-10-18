@@ -435,31 +435,37 @@ class VehicleRecognizer:
             # Get image dimensions
             height, width = hsv.shape[:2]
             
-            # Sample multiple regions to avoid shadows/reflections
-            # Top center (hood), middle center (door/body), lower center (body)
-            regions = []
+            # Sample only from car body area (avoiding windows, wheels, bumpers)
+            # Focus on the center body panels where paint color is most visible
+            # This is the "sweet spot" for most vehicles:
+            # - Vertical: 30-70% (avoids roof/windows and lower wheels/bumpers)
+            # - Horizontal: 25-75% (center body, avoiding edges)
             
-            # Top region (hood area) - 20-40% height, 30-70% width
-            top_region = hsv[int(height * 0.2):int(height * 0.4), int(width * 0.3):int(width * 0.7)]
-            regions.append(top_region)
+            body_region = hsv[
+                int(height * 0.30):int(height * 0.70),  # Middle 40% vertically
+                int(width * 0.25):int(width * 0.75)     # Center 50% horizontally
+            ]
             
-            # Middle region (door area) - 40-70% height, 30-70% width
-            mid_region = hsv[int(height * 0.4):int(height * 0.7), int(width * 0.3):int(width * 0.7)]
-            regions.append(mid_region)
-            
-            # Combine all regions
-            combined_region = np.vstack(regions)
+            # Use only the body region for color detection
+            combined_region = body_region
             
             # Split HSV channels
             h, s, v = cv2.split(combined_region)
             
             # Filter out very dark (shadows) and very bright (reflections) pixels
-            mask = (v > 30) & (v < 220)
+            # Relaxed thresholds for better compatibility with various lighting
+            mask = (v > 20) & (v < 235)
             
             # Calculate statistics on filtered pixels
-            if np.sum(mask) < 100:  # Not enough valid pixels
-                logger.warning("Insufficient valid pixels for color detection")
-                return 'unknown'
+            valid_pixels = np.sum(mask)
+            if valid_pixels < 50:  # Reduced threshold for smaller crops
+                logger.warning(f"Insufficient valid pixels for color detection ({valid_pixels} pixels)")
+                # Try without filtering if we have too few pixels
+                if len(h) > 100:
+                    mask = np.ones_like(v, dtype=bool)
+                    logger.debug("Using all pixels (no filtering)")
+                else:
+                    return 'unknown'
             
             filtered_h = h[mask]
             filtered_s = s[mask]
@@ -470,13 +476,16 @@ class VehicleRecognizer:
             median_value = np.median(filtered_v)
             median_hue = np.median(filtered_h)
             
+            logger.debug(f"Color detection - H:{median_hue:.1f} S:{median_saturation:.1f} V:{median_value:.1f} (pixels:{valid_pixels})")
+            
             # Detect achromatic colors (black, white, gray, silver) first
-            if median_saturation < 40:  # Low saturation = achromatic
-                if median_value < 50:
+            # Adjusted thresholds for better accuracy
+            if median_saturation < 45:  # Low saturation = achromatic
+                if median_value < 60:
                     return 'black'
-                elif median_value > 180:
+                elif median_value > 200:
                     return 'white'
-                elif median_value > 130:
+                elif median_value > 140:
                     return 'silver'
                 else:
                     return 'gray'

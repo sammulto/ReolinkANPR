@@ -33,11 +33,11 @@ class Notifier:
             
             logger.info(f"Notifications: enabled={self.enabled}, telegram={self.telegram_enabled}, ha={self.ha_enabled}")
             if self.enabled:
-                logger.info("✓ Notifications enabled")
+                logger.info("[OK] Notifications enabled")
                 if self.ha_enabled:
-                    logger.info("  ✓ Home Assistant webhook configured")
+                    logger.info("  [OK] Home Assistant webhook configured")
                 if self.telegram_enabled:
-                    logger.info(f"  ✓ Telegram bot configured (chat_id: {self.telegram_chat_id})")
+                    logger.info(f"  [OK] Telegram bot configured (chat_id: {self.telegram_chat_id})")
         else:
             logger.info("Notifications: not configured")
 
@@ -50,7 +50,8 @@ class Notifier:
         vehicle_crop_path: Optional[str] = None,
         vehicle_color: Optional[str] = None,
         vehicle_make: Optional[str] = None,
-        vehicle_model: Optional[str] = None
+        vehicle_model: Optional[str] = None,
+        vehicle_confidence: Optional[float] = None
     ):
         """Send notification when a plate is detected.
         
@@ -63,6 +64,7 @@ class Notifier:
             vehicle_color: Detected vehicle color
             vehicle_make: Detected vehicle make
             vehicle_model: Detected vehicle model
+            vehicle_confidence: Vehicle classification confidence (0-1)
         """
         logger.debug(f"send_detection called: enabled={self.enabled}, plate={plate_number}")
         
@@ -73,12 +75,12 @@ class Notifier:
         # Build message with vehicle info
         if plate_number == 'NO_PLATE' or 'NO_PLATE' in plate_number:
             # Vehicle-only detection
-            vehicle_desc = self._format_vehicle_description(vehicle_color, vehicle_make, vehicle_model)
-            message = f"🚗 Vehicle Detected (No Plate)\n{vehicle_desc}"
+            vehicle_desc = self._format_vehicle_description(vehicle_color, vehicle_make, vehicle_model, vehicle_confidence)
+            message = f"Vehicle Detected (No Plate)\n{vehicle_desc}"
         else:
             # Normal plate detection with vehicle info
-            vehicle_desc = self._format_vehicle_description(vehicle_color, vehicle_make, vehicle_model)
-            message = f"🚗 Plate Detected: {plate_number}\n📊 Confidence: {confidence:.1%}"
+            vehicle_desc = self._format_vehicle_description(vehicle_color, vehicle_make, vehicle_model, vehicle_confidence)
+            message = f"Plate Detected: {plate_number}\nPlate Confidence: {confidence:.1%}"
             if vehicle_desc:
                 message += f"\n{vehicle_desc}"
         
@@ -87,7 +89,7 @@ class Notifier:
             logger.debug("Sending to Home Assistant...")
             await self._send_to_home_assistant(
                 plate_number, confidence, image_path,
-                vehicle_color, vehicle_make, vehicle_model
+                vehicle_color, vehicle_make, vehicle_model, vehicle_confidence
             )
         
         # Send to Telegram
@@ -103,7 +105,8 @@ class Notifier:
         self, 
         color: Optional[str], 
         make: Optional[str], 
-        model: Optional[str]
+        model: Optional[str],
+        confidence: Optional[float] = None
     ) -> str:
         """Format vehicle description for notifications."""
         parts = []
@@ -117,7 +120,13 @@ class Notifier:
         if model and model != 'unknown':
             parts.append(f"{model.capitalize()}")
         
-        return " | ".join(parts) if parts else ""
+        description = " | ".join(parts) if parts else ""
+        
+        # Add confidence if available and vehicle was recognized
+        if description and confidence is not None and confidence > 0:
+            description += f"\nVehicle Confidence: {confidence:.1%}"
+        
+        return description
 
     async def _send_to_home_assistant(
         self, 
@@ -126,18 +135,20 @@ class Notifier:
         image_path: Optional[str],
         vehicle_color: Optional[str] = None,
         vehicle_make: Optional[str] = None,
-        vehicle_model: Optional[str] = None
+        vehicle_model: Optional[str] = None,
+        vehicle_confidence: Optional[float] = None
     ):
         """Send webhook to Home Assistant."""
         try:
             async with aiohttp.ClientSession() as session:
                 data = {
                     'plate_number': plate_number,
-                    'confidence': confidence,
+                    'plate_confidence': confidence,
                     'image_path': image_path,
                     'vehicle_color': vehicle_color or 'unknown',
                     'vehicle_make': vehicle_make or 'unknown',
-                    'vehicle_model': vehicle_model or 'unknown'
+                    'vehicle_model': vehicle_model or 'unknown',
+                    'vehicle_confidence': vehicle_confidence if vehicle_confidence is not None else 0.0
                 }
                 async with session.post(self.ha_webhook, json=data, timeout=5) as response:
                     if response.status == 200:
@@ -207,7 +218,7 @@ class Notifier:
 
     async def send_test(self, service: str = 'all'):
         """Send a test notification."""
-        test_message = "🧪 Test notification from ReolinkANPR"
+        test_message = "[TEST] Test notification from ReolinkANPR"
         
         if service in ['telegram', 'all'] and self.telegram_enabled:
             logger.info("Sending test to Telegram...")

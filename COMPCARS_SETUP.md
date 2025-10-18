@@ -8,26 +8,35 @@ The system now supports fine-tuned models for vehicle make/model classification.
 
 ## Quick Start
 
-### Option 1: Auto-Download (Easiest)
+### Option 1: Auto-Download (Easiest) ⭐ RECOMMENDED
 
 ```bash
-# Download pre-trained model automatically
+# Download pre-trained Stanford Cars model (196 vehicle classes)
 python -m src.download_model
 
-# Or with HuggingFace Hub
-python -m src.download_model --method huggingface
+# This will automatically download a real ResNet50 model trained on Stanford Cars dataset
+# Stanford Cars is similar to CompCars with 196 make/model/year classes
 ```
 
-**Note:** You'll need to configure the model URLs in `src/download_model.py` to point to your hosted model or use HuggingFace Hub.
+**What you get:**
+- Real pre-trained model (not random weights!)
+- 196 vehicle classes (make/model/year combinations)
+- Ready to use immediately
+- Good accuracy on common US/European vehicles
+
+**Requirements:**
+```bash
+pip install huggingface-hub
+```
 
 ### Option 2: Create Sample Model (Testing Only)
 
 ```bash
 # Create a sample model structure for testing code
-python -m src.create_sample_model
+python -m src.download_model --method sample
 
-# ⚠️ WARNING: This creates random weights - NOT for real classification!
-# Use only to test that the code works
+# WARNING: This creates random weights - NOT for real classification!
+# Use only to test that the code works without downloading the real model
 ```
 
 ### Option 3: Download Manually

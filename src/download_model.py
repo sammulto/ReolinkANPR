@@ -24,12 +24,13 @@ MODEL_URLS = {
     }
 }
 
-# Alternative: Use HuggingFace Hub for CompCars fine-tuned models
-# Search for models at: https://huggingface.co/models?search=compcars
+# Use HuggingFace Hub for Stanford Cars fine-tuned models
+# Stanford Cars dataset is similar to CompCars (196 car classes with make/model/year)
 HUGGINGFACE_MODEL = {
-    'repo_id': 'nateraw/vit-base-beans',  # Example repo format
+    'repo_id': 'anonauthors/stanford_cars-resnet50',  # Pre-trained ResNet50 on Stanford Cars
     'filename': 'pytorch_model.bin',
-    'note': 'Replace with actual CompCars fine-tuned model repo'
+    'config_filename': 'config.json',
+    'note': 'Stanford Cars dataset - 196 vehicle classes'
 }
 
 # Recommended CompCars pre-trained sources:
@@ -86,15 +87,15 @@ def download_pretrained_base_model(model_dir: Path) -> bool:
         import torch
         from torchvision import models
         
-        print("📥 Downloading pre-trained ResNet50 (ImageNet)...")
-        print("⚠️  Note: This is a BASE MODEL - needs fine-tuning on CompCars")
+        print("[Downloading] Pre-trained ResNet50 (ImageNet)...")
+        print("[WARNING] This is a BASE MODEL - needs fine-tuning on CompCars")
         
         # Download using torchvision
         model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
         
         weights_path = model_dir / 'compcars_resnet50_base.pth'
         torch.save(model.state_dict(), weights_path)
-        print(f"✓ Saved base model to: {weights_path}")
+        print(f"[SUCCESS] Saved base model to: {weights_path}")
         
         # Create a note file
         note_path = model_dir / 'README_BASE_MODEL.txt'
@@ -106,7 +107,7 @@ def download_pretrained_base_model(model_dir: Path) -> bool:
             f.write("2. Or download a CompCars fine-tuned model\n")
             f.write("3. Or use the sample model generator for testing\n")
         
-        print("\n⚠️  IMPORTANT:")
+        print("\n[IMPORTANT]")
         print("   This base model is trained on ImageNet (general objects)")
         print("   It needs to be fine-tuned on CompCars for vehicle classification")
         print("   See COMPCARS_SETUP.md for training instructions")
@@ -114,7 +115,7 @@ def download_pretrained_base_model(model_dir: Path) -> bool:
         return True
         
     except Exception as e:
-        print(f"❌ Error downloading base model: {e}")
+        print(f"[ERROR] Error downloading base model: {e}")
         return False
 
 
@@ -130,7 +131,7 @@ def download_from_github(model_dir: Path, model_name: str = 'resnet50') -> bool:
         True if successful, False otherwise
     """
     if model_name not in MODEL_URLS:
-        print(f"❌ Unknown model: {model_name}")
+        print(f"[ERROR] Unknown model: {model_name}")
         return False
     
     model_info = MODEL_URLS[model_name]
@@ -140,47 +141,48 @@ def download_from_github(model_dir: Path, model_name: str = 'resnet50') -> bool:
     try:
         # Download weights
         if not weights_path.exists():
-            print(f"📥 Downloading model weights...")
+            print(f"[Downloading] Model weights...")
             download_url(model_info['weights'], weights_path, "Model weights")
             
             # Verify checksum
             if model_info['weights_md5']:
                 if verify_md5(weights_path, model_info['weights_md5']):
-                    print("✓ Model weights verified")
+                    print("[SUCCESS] Model weights verified")
                 else:
-                    print("❌ Model weights verification failed!")
+                    print("[ERROR] Model weights verification failed!")
                     weights_path.unlink()
                     return False
         else:
-            print(f"✓ Model weights already exist: {weights_path}")
+            print(f"[INFO] Model weights already exist: {weights_path}")
         
         # Download labels
         if not labels_path.exists():
-            print(f"📥 Downloading class labels...")
+            print(f"[Downloading] Class labels...")
             download_url(model_info['labels'], labels_path, "Class labels")
             
             # Verify checksum
             if model_info['labels_md5']:
                 if verify_md5(labels_path, model_info['labels_md5']):
-                    print("✓ Class labels verified")
+                    print("[SUCCESS] Class labels verified")
                 else:
-                    print("❌ Class labels verification failed!")
+                    print("[ERROR] Class labels verification failed!")
                     labels_path.unlink()
                     return False
         else:
-            print(f"✓ Class labels already exist: {labels_path}")
+            print(f"[INFO] Class labels already exist: {labels_path}")
         
-        print("✅ CompCars model downloaded successfully!")
+        print("[SUCCESS] CompCars model downloaded successfully!")
         return True
         
     except Exception as e:
-        print(f"❌ Error downloading model: {e}")
+        print(f"[ERROR] Error downloading model: {e}")
         return False
 
 
 def download_from_huggingface(model_dir: Path) -> bool:
     """
-    Download model from HuggingFace Hub.
+    Download Stanford Cars pre-trained model from HuggingFace Hub.
+    Stanford Cars dataset has 196 classes of vehicles (make/model/year).
     
     Args:
         model_dir: Directory to save models
@@ -190,36 +192,74 @@ def download_from_huggingface(model_dir: Path) -> bool:
     """
     try:
         from huggingface_hub import hf_hub_download
+        import json
+        import torch
         
-        print("📥 Downloading from HuggingFace Hub...")
+        print("[Downloading] Stanford Cars ResNet50 from HuggingFace Hub...")
+        print(f"   Repository: {HUGGINGFACE_MODEL['repo_id']}")
         
         # Download model weights
+        print("   Downloading model weights...")
         weights_path = hf_hub_download(
             repo_id=HUGGINGFACE_MODEL['repo_id'],
-            filename=HUGGINGFACE_MODEL['filename'],
-            cache_dir=str(model_dir)
+            filename=HUGGINGFACE_MODEL['filename']
         )
         
-        # Download labels
-        labels_path = hf_hub_download(
+        # Download config to get class labels
+        print("   Downloading config...")
+        config_path = hf_hub_download(
             repo_id=HUGGINGFACE_MODEL['repo_id'],
-            filename='labels.txt',
-            cache_dir=str(model_dir)
+            filename=HUGGINGFACE_MODEL['config_filename']
         )
         
-        # Copy to expected locations
-        import shutil
-        shutil.copy(weights_path, model_dir / 'compcars_resnet50.pth')
-        shutil.copy(labels_path, model_dir / 'compcars_labels.txt')
+        # Load config to extract labels
+        with open(config_path, 'r') as f:
+            config = json.load(f)
         
-        print("✅ Model downloaded from HuggingFace!")
+        # Extract class labels from config
+        labels = None
+        if 'id2label' in config:
+            # Format: {id: label}
+            labels = [config['id2label'][str(i)] for i in range(len(config['id2label']))]
+        elif 'label_names' in config:
+            # Format: {label: id} - need to invert
+            label_names = config['label_names']
+            num_classes = config.get('num_classes', len(label_names))
+            labels = ['unknown'] * num_classes
+            for label_name, class_id in label_names.items():
+                if class_id < num_classes:
+                    labels[class_id] = label_name
+        
+        if not labels:
+            # Fallback: Create generic labels if not in config
+            print("   [WARNING] Labels not found in config, creating generic labels")
+            labels = [f"vehicle_class_{i}" for i in range(196)]
+        
+        # Copy weights to expected location
+        import shutil
+        dest_weights = model_dir / 'compcars_resnet50.pth'
+        shutil.copy(weights_path, dest_weights)
+        print(f"   [SUCCESS] Saved model weights to: {dest_weights}")
+        
+        # Save labels
+        labels_file = model_dir / 'compcars_labels.txt'
+        with open(labels_file, 'w', encoding='utf-8') as f:
+            for label in labels:
+                f.write(f'{label}\n')
+        print(f"   [SUCCESS] Saved {len(labels)} class labels to: {labels_file}")
+        
+        print("\n[SUCCESS] Stanford Cars model downloaded successfully!")
+        print(f"   Classes: {len(labels)} vehicle types")
+        print("   Note: This is trained on Stanford Cars dataset (similar to CompCars)")
         return True
         
     except ImportError:
-        print("❌ huggingface_hub not installed. Install with: pip install huggingface_hub")
+        print("[ERROR] huggingface_hub not installed. Install with: pip install huggingface_hub")
         return False
     except Exception as e:
-        print(f"❌ Error downloading from HuggingFace: {e}")
+        print(f"[ERROR] Error downloading from HuggingFace: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -239,14 +279,14 @@ def download_model(method: str = 'github', model_dir: Path = None) -> bool:
     
     model_dir.mkdir(parents=True, exist_ok=True)
     
-    print(f"🎯 Downloading CompCars model to: {model_dir}")
+    print(f"[INFO] Downloading CompCars model to: {model_dir}")
     
     if method == 'github':
         return download_from_github(model_dir)
     elif method == 'huggingface':
         return download_from_huggingface(model_dir)
     else:
-        print(f"❌ Unknown download method: {method}")
+        print(f"[ERROR] Unknown download method: {method}")
         return False
 
 
@@ -260,8 +300,8 @@ def main():
     )
     parser.add_argument('--method', 
                        choices=['github', 'huggingface', 'base', 'sample'], 
-                       default='sample',
-                       help='Download method (default: sample)')
+                       default='huggingface',
+                       help='Download method (default: huggingface - downloads real Stanford Cars model)')
     parser.add_argument('--model-dir', type=str, default='models',
                        help='Directory to save models (default: models/)')
     
@@ -287,7 +327,7 @@ def main():
             create_sample_model.save_sample_model(str(model_dir))
             success = True
         except Exception as e:
-            print(f"❌ Error creating sample model: {e}")
+            print(f"[ERROR] Error creating sample model: {e}")
             print("   Try: python -m src.create_sample_model")
             success = False
     
@@ -303,7 +343,7 @@ def main():
         print()
         success = download_model(method='github', model_dir=model_dir)
         if not success:
-            print("\n💡 Tip: Configure MODEL_URLS in src/download_model.py")
+            print("\n[TIP] Configure MODEL_URLS in src/download_model.py")
             print("   Or use --method sample to create test model")
     
     elif args.method == 'huggingface':
@@ -311,27 +351,27 @@ def main():
         print()
         success = download_model(method='huggingface', model_dir=model_dir)
         if not success:
-            print("\n💡 Tip: Configure HUGGINGFACE_MODEL in src/download_model.py")
+            print("\n[TIP] Configure HUGGINGFACE_MODEL in src/download_model.py")
             print("   Or use --method sample to create test model")
     
     else:
-        print(f"❌ Unknown method: {args.method}")
+        print(f"[ERROR] Unknown method: {args.method}")
         success = False
     
     print()
     print("=" * 60)
     
     if success:
-        print("✅ Setup complete!")
+        print("[SUCCESS] Setup complete!")
         print(f"   Model directory: {model_dir}")
         
         # Check what was created
         if (model_dir / 'compcars_resnet50.pth').exists():
-            print(f"   ✓ Model file: compcars_resnet50.pth")
+            print(f"   [OK] Model file: compcars_resnet50.pth")
         if (model_dir / 'compcars_labels.txt').exists():
-            print(f"   ✓ Labels file: compcars_labels.txt")
+            print(f"   [OK] Labels file: compcars_labels.txt")
         
-        print("\n🚀 Next steps:")
+        print("\nNext steps:")
         if args.method == 'sample':
             print("   - Sample model created for testing only")
             print("   - For real classification, train on CompCars dataset")
@@ -343,7 +383,7 @@ def main():
             print("   - Restart ReolinkANPR to use the model")
             print("   - Check logs to verify model loaded correctly")
     else:
-        print("❌ Setup failed!")
+        print("[ERROR] Setup failed!")
         print("\nAvailable options:")
         print("   --method sample      Create test model (random weights)")
         print("   --method base        Download ImageNet ResNet50 (needs training)")

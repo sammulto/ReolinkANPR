@@ -27,6 +27,7 @@ aiohttp>=3.9.0  # Required for notifications (Telegram, Home Assistant)
 # Utilities
 python-dateutil
 tqdm>=4.65.0  # Progress bars for model downloads
+huggingface-hub>=0.20.0  # For downloading pre-trained models from HuggingFace
 
 # System Requirements (install separately):
 # - Python 3.11+ (REQUIRED for TCP push events via Baichuan protocol)

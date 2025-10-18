@@ -323,7 +323,8 @@ class ANPRService:
                                 vehicle_crop_path,  # Pass vehicle crop path
                                 vehicle.get('color'),
                                 vehicle.get('make'),
-                                vehicle.get('model')
+                                vehicle.get('model'),
+                                vehicle.get('confidence')  # Vehicle recognition confidence
                             )
                     else:
                         # Fallback: send single notification with primary vehicle data
@@ -339,7 +340,8 @@ class ANPRService:
                             vehicle_crop_path,  # Pass vehicle crop path
                             result.get('vehicle_color'),
                             result.get('vehicle_make'),
-                            result.get('vehicle_model')
+                            result.get('vehicle_model'),
+                            result.get('vehicle_confidence')  # Vehicle recognition confidence
                         )
             else:
                 logger.info("No valid plates found in frames")

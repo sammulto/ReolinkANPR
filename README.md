@@ -63,10 +63,11 @@ ReolinkANPR now includes advanced vehicle recognition capabilities powered by de
 - **Vehicle Color** - Black, White, Silver, Gray, Red, Blue, Green, Yellow, Orange, Brown, Gold, Cyan, Purple, Pink
   - Uses advanced HSV histogram analysis with shadow/reflection filtering
   - Multi-region sampling for accurate color detection
-- **Vehicle Make & Model** - Powered by CompCars dataset (optional)
-  - Supports fine-tuned models for 200+ car models
-  - Returns 'unknown' if model not provided (color detection still works)
-  - See [COMPCARS_SETUP.md](COMPCARS_SETUP.md) for setup instructions
+- **Vehicle Make & Model** - Powered by Stanford Cars/CompCars dataset
+  - **Quick Start**: Run `python -m src.download_model` to get a real pre-trained model!
+  - Supports 196+ vehicle classes (make/model/year)
+  - See [QUICK_START_VEHICLE_MODEL.md](QUICK_START_VEHICLE_MODEL.md) for 2-minute setup
+  - See [COMPCARS_SETUP.md](COMPCARS_SETUP.md) for advanced training/customization
 - **Vehicle Location** - YOLOv9 detects and crops individual vehicles from multi-vehicle scenes
 
 ### Key Features
