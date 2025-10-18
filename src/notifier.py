@@ -80,7 +80,7 @@ class Notifier:
         else:
             # Normal plate detection with vehicle info
             vehicle_desc = self._format_vehicle_description(vehicle_color, vehicle_make, vehicle_model, vehicle_confidence)
-            message = f"Plate Detected: {plate_number}\nPlate Confidence: {confidence:.1%}"
+            message = f"Plate Detected: {plate_number}\nPlate Conf: {confidence:.1%}"
             if vehicle_desc:
                 message += f"\n{vehicle_desc}"
         
@@ -121,10 +121,6 @@ class Notifier:
             parts.append(f"{model.capitalize()}")
         
         description = " | ".join(parts) if parts else ""
-        
-        # Add confidence if available and vehicle was recognized
-        if description and confidence is not None and confidence > 0:
-            description += f"\nVehicle Confidence: {confidence:.1%}"
         
         return description
 

@@ -429,6 +429,7 @@ class ALPRProcessor:
     ) -> Optional[Dict]:
         """
         Find the best plate detection for a specific vehicle across its tracked frames.
+        Samples multiple detections and aggregates results for better accuracy.
         
         Args:
             vehicle_track: Vehicle track containing detection list
@@ -437,13 +438,16 @@ class ALPRProcessor:
         Returns:
             Dict with plate info (plate_text, confidence, bbox, full_image, plate_crop) or None
         """
-        best_plate = None
-        best_confidence = 0.0
+        # Collect all plate detections across all vehicle detections
+        plate_candidates = {}  # {plate_text: [detection_dicts]}
+        
+        logger.debug(f"Scanning {len(vehicle_track['detections'])} vehicle detections for plates...")
         
         for detection in vehicle_track['detections']:
             try:
                 # Get the vehicle crop from this detection
                 vehicle_crop = detection['crop']
+                frame_idx = detection['frame_idx']
                 
                 # Run ALPR on the vehicle crop
                 plate_results = self.alpr.predict(vehicle_crop)
@@ -458,48 +462,80 @@ class ALPRProcessor:
                     
                     # Check confidence threshold
                     if ocr_confidence < self.config.min_confidence:
-                        logger.debug(f"Low confidence {ocr_confidence:.3f} for {plate_text} in vehicle crop")
+                        logger.debug(f"Frame {frame_idx}: Low confidence {ocr_confidence:.3f} for {plate_text}")
                         continue
                     
-                    logger.debug(f"Found plate {plate_text} (conf: {ocr_confidence:.3f}) in vehicle crop")
+                    logger.debug(f"Frame {frame_idx}: Found {plate_text} (conf: {ocr_confidence:.3f})")
                     
-                    # Track best plate for this vehicle
-                    if ocr_confidence > best_confidence:
-                        best_confidence = ocr_confidence
-                        
-                        # Convert plate bbox from vehicle crop coordinates to full image coordinates
-                        plate_bbox_crop = result.detection.bounding_box
-                        vehicle_bbox = detection['bbox']
-                        
-                        # Calculate plate bbox in full image coordinates
-                        plate_x1 = vehicle_bbox[0] + int(plate_bbox_crop.x1)
-                        plate_y1 = vehicle_bbox[1] + int(plate_bbox_crop.y1)
-                        plate_x2 = vehicle_bbox[0] + int(plate_bbox_crop.x2)
-                        plate_y2 = vehicle_bbox[1] + int(plate_bbox_crop.y2)
-                        
-                        # Crop plate from vehicle crop image
-                        crop_x1, crop_y1 = int(plate_bbox_crop.x1), int(plate_bbox_crop.y1)
-                        crop_x2, crop_y2 = int(plate_bbox_crop.x2), int(plate_bbox_crop.y2)
-                        plate_crop = vehicle_crop[crop_y1:crop_y2, crop_x1:crop_x2].copy()
-                        
-                        best_plate = {
-                            'plate_text': plate_text,
-                            'confidence': ocr_confidence,
-                            'bbox': {
-                                'xmin': plate_x1,
-                                'ymin': plate_y1,
-                                'xmax': plate_x2,
-                                'ymax': plate_y2
-                            },
-                            'full_image': detection['frame_img'],
-                            'plate_crop': plate_crop
-                        }
+                    # Convert plate bbox from vehicle crop coordinates to full image coordinates
+                    plate_bbox_crop = result.detection.bounding_box
+                    vehicle_bbox = detection['bbox']
+                    
+                    # Calculate plate bbox in full image coordinates
+                    plate_x1 = vehicle_bbox[0] + int(plate_bbox_crop.x1)
+                    plate_y1 = vehicle_bbox[1] + int(plate_bbox_crop.y1)
+                    plate_x2 = vehicle_bbox[0] + int(plate_bbox_crop.x2)
+                    plate_y2 = vehicle_bbox[1] + int(plate_bbox_crop.y2)
+                    
+                    # Crop plate from vehicle crop image
+                    crop_x1, crop_y1 = int(plate_bbox_crop.x1), int(plate_bbox_crop.y1)
+                    crop_x2, crop_y2 = int(plate_bbox_crop.x2), int(plate_bbox_crop.y2)
+                    plate_crop = vehicle_crop[crop_y1:crop_y2, crop_x1:crop_x2].copy()
+                    
+                    # Store this detection
+                    plate_detection = {
+                        'plate_text': plate_text,
+                        'confidence': ocr_confidence,
+                        'bbox': {
+                            'xmin': plate_x1,
+                            'ymin': plate_y1,
+                            'xmax': plate_x2,
+                            'ymax': plate_y2
+                        },
+                        'full_image': detection['frame_img'],
+                        'plate_crop': plate_crop,
+                        'frame_idx': frame_idx
+                    }
+                    
+                    # Group by plate text
+                    if plate_text not in plate_candidates:
+                        plate_candidates[plate_text] = []
+                    plate_candidates[plate_text].append(plate_detection)
                 
             except Exception as e:
                 logger.debug(f"Error finding plate in vehicle crop: {e}")
                 continue
         
-        return best_plate
+        if not plate_candidates:
+            logger.debug("No plates found in any vehicle detection")
+            return None
+        
+        # Aggregate results: select plate text with most detections and highest average confidence
+        best_plate_text = None
+        best_score = 0.0
+        
+        for plate_text, detections in plate_candidates.items():
+            # Score = detection_count * average_confidence
+            avg_confidence = sum(d['confidence'] for d in detections) / len(detections)
+            score = len(detections) * avg_confidence
+            
+            logger.debug(f"Plate {plate_text}: {len(detections)} detections, avg conf={avg_confidence:.3f}, score={score:.3f}")
+            
+            if score > best_score:
+                best_score = score
+                best_plate_text = plate_text
+        
+        if best_plate_text:
+            # Get the best individual detection for this plate text (highest confidence)
+            detections = plate_candidates[best_plate_text]
+            best_detection = max(detections, key=lambda d: d['confidence'])
+            
+            logger.info(f"Selected plate {best_plate_text} from {len(detections)} detections "
+                       f"(best conf: {best_detection['confidence']:.3f})")
+            
+            return best_detection
+        
+        return None
 
     def _sample_vehicle_recognition_multiframe(
         self,

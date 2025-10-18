@@ -278,7 +278,6 @@
         const color = event.vehicle_color || 'unknown';
         const make = event.vehicle_make || 'unknown';
         const model = event.vehicle_model || 'unknown';
-        const confidence = event.vehicle_confidence;
         
         if (color === 'unknown' && make === 'unknown' && model === 'unknown') {
             return '<span class="text-muted">Not available</span>';
@@ -298,14 +297,7 @@
             info.push(`<span class="badge bg-secondary">${capitalize(model)}</span>`);
         }
         
-        let html = '<div>' + info.join(' ') + '</div>';
-        
-        // Add vehicle confidence on the right side
-        if (confidence && confidence > 0 && (make !== 'unknown' || model !== 'unknown')) {
-            html += `<div class="mt-1"><small class="text-muted">Conf: </small><span class="badge bg-success">${(confidence * 100).toFixed(1)}%</span></div>`;
-        }
-        
-        return html;
+        return '<div>' + info.join(' ') + '</div>';
     }
 </script>
 {% endblock %}
