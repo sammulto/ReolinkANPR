@@ -154,11 +154,11 @@
                     <thead>
                         <tr>
                             <th style="width: 180px;">Time</th>
-                            <th style="width: 200px;">Vehicle Image</th>
+                            <th style="width: 150px;">Full Image</th>
+                            <th style="width: 150px;">Vehicle Crop</th>
                             <th style="width: 120px;">Plate Crop</th>
-                            <th style="width: 150px;">Plate Number</th>
+                            <th style="width: 180px;">Plate Number</th>
                             <th style="width: 200px;">Vehicle Info</th>
-                            <th style="width: 120px;">Confidence</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -169,10 +169,19 @@
                                     ${event.image_path ? 
                                         `<img src="/image/${event.image_path}" 
                                              class="img-thumbnail" 
-                                             style="max-width: 150px; max-height: 100px; cursor: pointer;" 
+                                             style="max-width: 120px; max-height: 80px; cursor: pointer;" 
                                              onclick="showImage('/image/${event.image_path}')"
-                                             alt="Vehicle">` : 
+                                             alt="Full frame">` : 
                                         '<span class="text-muted">No image</span>'}
+                                </td>
+                                <td>
+                                    ${event.vehicle_crop_path ? 
+                                        `<img src="/image/${event.vehicle_crop_path}" 
+                                             class="img-thumbnail" 
+                                             style="max-width: 120px; max-height: 80px; cursor: pointer;" 
+                                             onclick="showImage('/image/${event.vehicle_crop_path}')"
+                                             alt="Vehicle crop">` : 
+                                        '<span class="text-muted">-</span>'}
                                 </td>
                                 <td>
                                     ${event.plate_crop_path ? 
@@ -184,17 +193,10 @@
                                         '<span class="text-muted">-</span>'}
                                 </td>
                                 <td>
-                                    ${event.plate_number && event.plate_number !== 'NO_PLATE' ? 
-                                        `<span class="badge bg-primary fs-6">${event.plate_number}</span>` : 
-                                        '<span class="badge bg-warning text-dark fs-6">No Plate</span>'}
+                                    ${formatPlateInfo(event)}
                                 </td>
                                 <td>
                                     ${formatVehicleInfo(event)}
-                                </td>
-                                <td>
-                                    ${event.confidence ? 
-                                        `<span class="badge bg-success">${(event.confidence * 100).toFixed(1)}%</span>` : 
-                                        '-'}
                                 </td>
                             </tr>
                         `).join('')}
@@ -254,10 +256,29 @@
         return date.toLocaleString();
     }
 
+    function formatPlateInfo(event) {
+        let html = '';
+        
+        // Plate number badge
+        if (event.plate_number && event.plate_number !== 'NO_PLATE') {
+            html += `<div><span class="badge bg-primary fs-6">${event.plate_number}</span></div>`;
+        } else {
+            html += `<div><span class="badge bg-warning text-dark fs-6">No Plate</span></div>`;
+        }
+        
+        // Plate confidence on the right side
+        if (event.confidence && event.plate_number !== 'NO_PLATE') {
+            html += `<div class="mt-1"><small class="text-muted">Conf: </small><span class="badge bg-success">${(event.confidence * 100).toFixed(1)}%</span></div>`;
+        }
+        
+        return html;
+    }
+
     function formatVehicleInfo(event) {
         const color = event.vehicle_color || 'unknown';
         const make = event.vehicle_make || 'unknown';
         const model = event.vehicle_model || 'unknown';
+        const confidence = event.vehicle_confidence;
         
         if (color === 'unknown' && make === 'unknown' && model === 'unknown') {
             return '<span class="text-muted">Not available</span>';
@@ -277,7 +298,14 @@
             info.push(`<span class="badge bg-secondary">${capitalize(model)}</span>`);
         }
         
-        return info.join(' ');
+        let html = '<div>' + info.join(' ') + '</div>';
+        
+        // Add vehicle confidence on the right side
+        if (confidence && confidence > 0 && (make !== 'unknown' || model !== 'unknown')) {
+            html += `<div class="mt-1"><small class="text-muted">Conf: </small><span class="badge bg-success">${(confidence * 100).toFixed(1)}%</span></div>`;
+        }
+        
+        return html;
     }
 </script>
 {% endblock %}
