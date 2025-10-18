@@ -174,6 +174,7 @@ class VehicleRecognizer:
     def _load_compcars_model(self, model_path: str) -> bool:
         """
         Load a fine-tuned CompCars classification model.
+        Automatically detects and prefers CompCars Surveillance model if available.
         
         Args:
             model_path: Path to the saved model weights
@@ -184,15 +185,35 @@ class VehicleRecognizer:
         try:
             from pathlib import Path
             
-            model_file = Path(model_path)
-            labels_file = Path('models/compcars_labels.txt')
+            # Priority order: Surveillance model > Standard model
+            models_to_try = [
+                {
+                    'model': Path('models/compcars_surveillance.pth'),
+                    'labels': Path('models/compcars_surveillance_labels.txt'),
+                    'name': 'CompCars Surveillance (1,716 classes)'
+                },
+                {
+                    'model': Path(model_path),
+                    'labels': Path('models/compcars_labels.txt'),
+                    'name': 'CompCars Standard (196 classes)'
+                }
+            ]
             
-            if not model_file.exists():
-                logger.debug(f"Model file not found: {model_path}")
-                return False
+            model_file = None
+            labels_file = None
+            model_name = None
             
-            if not labels_file.exists():
-                logger.debug(f"Labels file not found: {labels_file}")
+            # Try each model in priority order
+            for model_config in models_to_try:
+                if model_config['model'].exists() and model_config['labels'].exists():
+                    model_file = model_config['model']
+                    labels_file = model_config['labels']
+                    model_name = model_config['name']
+                    logger.info(f"Found {model_name}")
+                    break
+            
+            if model_file is None or labels_file is None:
+                logger.debug(f"No CompCars model found")
                 return False
             
             # Load class labels
@@ -200,7 +221,7 @@ class VehicleRecognizer:
                 self.class_labels = [line.strip() for line in f.readlines()]
             
             num_classes = len(self.class_labels)
-            logger.info(f"Loaded {num_classes} vehicle classes from CompCars")
+            logger.info(f"Loading {num_classes} vehicle classes from {model_name}")
             
             # Create model with correct number of output classes
             self.classifier_model = torchvision.models.resnet50(weights=None)
@@ -377,13 +398,13 @@ class VehicleRecognizer:
     
     def recognize_vehicle(self, image: np.ndarray) -> Dict[str, str]:
         """
-        Recognize vehicle attributes from image.
+        Recognize vehicle attributes from image with enhanced confidence handling.
         
         Args:
             image: OpenCV image (BGR format) of the vehicle
             
         Returns:
-            Dict with color, make, and model information
+            Dict with color, make, model, and confidence information
         """
         if not self.enabled:
             return {
@@ -394,19 +415,24 @@ class VehicleRecognizer:
             }
         
         try:
-            # Detect color using traditional CV (more reliable than deep learning for color)
-            color = self._detect_color(image)
+            # Detect color using enhanced HSV analysis with lighting normalization
+            color = self._detect_color_enhanced(image)
             
-            # Use deep learning for make/model recognition
-            # Note: This is a simplified implementation. For production, you would use
-            # a model specifically trained on vehicle make/model classification
-            make, model = self._classify_vehicle(image)
+            # Use deep learning for make/model recognition with confidence
+            make, model, confidence = self._classify_vehicle_with_confidence(image)
+            
+            # Only return make/model if confidence is above threshold
+            min_confidence = getattr(self.config, 'vehicle_min_confidence', 0.4)
+            if confidence < min_confidence:
+                logger.debug(f"Vehicle classification confidence {confidence:.3f} below threshold {min_confidence}")
+                make, model = 'unknown', 'unknown'
+                confidence = 0.0
             
             return {
                 'color': color,
                 'make': make,
                 'model': model,
-                'confidence': 0.8  # Placeholder - would come from actual model
+                'confidence': confidence
             }
             
         except Exception as e:
@@ -421,6 +447,90 @@ class VehicleRecognizer:
     def _detect_color(self, image: np.ndarray) -> str:
         """
         Detect dominant vehicle color using improved HSV analysis with histogram-based approach.
+        
+        Args:
+            image: OpenCV image (BGR format) - should be cropped to vehicle
+            
+        Returns:
+            Color name as string
+        """
+        # Use enhanced color detection if available, fallback to basic
+        try:
+            return self._detect_color_enhanced(image)
+        except Exception as e:
+            logger.warning(f"Enhanced color detection failed, using basic: {e}")
+            return self._detect_color_basic(image)
+    
+    def _detect_color_enhanced(self, image: np.ndarray) -> str:
+        """
+        Enhanced color detection with lighting normalization and better sampling.
+        
+        Args:
+            image: OpenCV image (BGR format) - should be cropped to vehicle
+            
+        Returns:
+            Color name as string
+        """
+        try:
+            # Normalize lighting using LAB color space
+            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            
+            # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to L channel
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            l_normalized = clahe.apply(l)
+            
+            # Merge back and convert to BGR
+            normalized_lab = cv2.merge([l_normalized, a, b])
+            normalized_bgr = cv2.cvtColor(normalized_lab, cv2.COLOR_LAB2BGR)
+            
+            # Convert normalized image to HSV
+            hsv = cv2.cvtColor(normalized_bgr, cv2.COLOR_BGR2HSV)
+            
+            # Get image dimensions
+            height, width = hsv.shape[:2]
+            
+            # Sample from multiple body regions for better accuracy
+            regions = [
+                # Center body (primary)
+                hsv[int(height * 0.30):int(height * 0.70), int(width * 0.25):int(width * 0.75)],
+                # Upper body (hood area)
+                hsv[int(height * 0.20):int(height * 0.45), int(width * 0.30):int(width * 0.70)],
+                # Side panels
+                hsv[int(height * 0.35):int(height * 0.65), int(width * 0.15):int(width * 0.50)]
+            ]
+            
+            # Collect color votes from each region
+            color_votes = []
+            for region in regions:
+                if region.size > 0:
+                    color = self._detect_color_from_region(region)
+                    if color != 'unknown':
+                        color_votes.append(color)
+            
+            # Return most common color (voting system)
+            if color_votes:
+                from collections import Counter
+                color_counts = Counter(color_votes)
+                most_common = color_counts.most_common(1)[0]
+                # Require at least 2/3 agreement for confidence
+                if most_common[1] >= len(color_votes) * 0.5:
+                    return most_common[0]
+            
+            # Fallback to center region only
+            body_region = hsv[
+                int(height * 0.30):int(height * 0.70),
+                int(width * 0.25):int(width * 0.75)
+            ]
+            return self._detect_color_from_region(body_region)
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced color detection: {e}")
+            return 'unknown'
+    
+    def _detect_color_basic(self, image: np.ndarray) -> str:
+        """
+        Basic color detection (original implementation as fallback).
         
         Args:
             image: OpenCV image (BGR format) - should be cropped to vehicle
@@ -557,6 +667,77 @@ class VehicleRecognizer:
             logger.error(f"Error detecting color: {e}")
             return 'unknown'
     
+    def _detect_color_from_region(self, region: np.ndarray) -> str:
+        """
+        Detect color from a specific HSV region.
+        
+        Args:
+            region: HSV image region
+            
+        Returns:
+            Color name as string
+        """
+        try:
+            if region.size == 0:
+                return 'unknown'
+            
+            # Split HSV channels
+            h, s, v = cv2.split(region)
+            
+            # Filter out very dark and very bright pixels
+            mask = (v > 20) & (v < 235)
+            
+            if np.sum(mask) < 50:
+                return 'unknown'
+            
+            filtered_h = h[mask]
+            filtered_s = s[mask]
+            filtered_v = v[mask]
+            
+            # Calculate median values
+            median_saturation = np.median(filtered_s)
+            median_value = np.median(filtered_v)
+            median_hue = np.median(filtered_h)
+            
+            # Detect achromatic colors
+            if median_saturation < 45:
+                if median_value < 60:
+                    return 'black'
+                elif median_value > 200:
+                    return 'white'
+                elif median_value > 140:
+                    return 'silver'
+                else:
+                    return 'gray'
+            
+            # For chromatic colors
+            chromatic_mask = (s > 40) & (v > 30) & (v < 220)
+            if np.sum(chromatic_mask) < 50:
+                return 'unknown'
+            
+            chromatic_h = h[chromatic_mask]
+            
+            # Determine dominant hue range
+            median_hue = np.median(chromatic_h)
+            
+            # Hue ranges (0-180 in OpenCV)
+            if median_hue < 10 or median_hue > 170:
+                return 'red'
+            elif median_hue < 25:
+                return 'orange'
+            elif median_hue < 35:
+                return 'yellow'
+            elif median_hue < 85:
+                return 'green'
+            elif median_hue < 130:
+                return 'blue'
+            else:
+                return 'purple'
+                
+        except Exception as e:
+            logger.error(f"Error in region color detection: {e}")
+            return 'unknown'
+    
     def _classify_vehicle(self, image: np.ndarray) -> tuple[str, str]:
         """
         Classify vehicle make and model using CompCars fine-tuned model.
@@ -615,6 +796,121 @@ class VehicleRecognizer:
         except Exception as e:
             logger.error(f"Error classifying vehicle: {e}")
             return 'unknown', 'unknown'
+    
+    def _classify_vehicle_with_confidence(self, image: np.ndarray) -> tuple[str, str, float]:
+        """
+        Classify vehicle make and model with confidence score.
+        
+        Args:
+            image: OpenCV image (BGR format)
+            
+        Returns:
+            Tuple of (make, model, confidence)
+        """
+        # Check if CompCars model is loaded
+        if self.classifier_model is None or self.class_labels is None:
+            return 'unknown', 'unknown', 0.0
+        
+        try:
+            # Enhance image quality for better classification
+            enhanced_image = self._enhance_vehicle_crop(image)
+            
+            # Convert BGR to RGB
+            rgb_image = cv2.cvtColor(enhanced_image, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(rgb_image)
+            
+            # Preprocess
+            input_tensor = self.transform(pil_image).unsqueeze(0).to(self.device)
+            
+            # Run inference
+            with torch.no_grad():
+                outputs = self.classifier_model(input_tensor)
+                probabilities = torch.nn.functional.softmax(outputs, dim=1)
+                
+                # Get top-k predictions for better confidence calibration
+                top_k = min(5, len(self.class_labels))
+                top_probs, top_indices = torch.topk(probabilities[0], top_k)
+                
+                # Use the top prediction
+                confidence = top_probs[0].item()
+                predicted_idx = top_indices[0].item()
+            
+            # Get predicted class
+            if predicted_idx < len(self.class_labels):
+                predicted_class = self.class_labels[predicted_idx]
+                
+                # Parse class name (CompCars format: "make_model_year" or "make model")
+                # Example: "Audi_A4_Sedan_2012" or "Toyota Camry"
+                parts = predicted_class.replace('_', ' ').split()
+                
+                if len(parts) >= 2:
+                    make = parts[0].lower()
+                    model = ' '.join(parts[1:]).lower()
+                    # Remove year if present (typically 4 digits at the end)
+                    if model.split()[-1].isdigit() and len(model.split()[-1]) == 4:
+                        model = ' '.join(model.split()[:-1])
+                    
+                    # Log top-k predictions for debugging
+                    if top_k > 1:
+                        top_predictions = []
+                        for i in range(min(3, top_k)):
+                            idx = top_indices[i].item()
+                            prob = top_probs[i].item()
+                            if idx < len(self.class_labels):
+                                class_name = self.class_labels[idx]
+                                top_predictions.append(f"{class_name}({prob:.2f})")
+                        logger.debug(f"Top predictions: {', '.join(top_predictions)}")
+                    
+                    logger.info(f"Classified as {make} {model} (confidence: {confidence:.3f})")
+                    return make, model, confidence
+                else:
+                    logger.debug(f"Could not parse class name: {predicted_class}")
+                    return 'unknown', 'unknown', 0.0
+            else:
+                logger.error(f"Predicted index {predicted_idx} out of range")
+                return 'unknown', 'unknown', 0.0
+            
+        except Exception as e:
+            logger.error(f"Error classifying vehicle with confidence: {e}")
+            return 'unknown', 'unknown', 0.0
+    
+    def _enhance_vehicle_crop(self, image: np.ndarray) -> np.ndarray:
+        """
+        Enhance vehicle crop image for better classification.
+        
+        Args:
+            image: OpenCV image (BGR format)
+            
+        Returns:
+            Enhanced image
+        """
+        try:
+            # Convert to LAB color space
+            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            
+            # Apply CLAHE to L channel for better contrast
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            l_enhanced = clahe.apply(l)
+            
+            # Merge and convert back to BGR
+            enhanced_lab = cv2.merge([l_enhanced, a, b])
+            enhanced_bgr = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
+            
+            # Apply slight sharpening
+            kernel = np.array([[-1,-1,-1],
+                              [-1, 9,-1],
+                              [-1,-1,-1]]) / 9.0
+            sharpened = cv2.filter2D(enhanced_bgr, -1, kernel)
+            
+            # Blend original and sharpened (50/50)
+            result = cv2.addWeighted(enhanced_bgr, 0.5, sharpened, 0.5, 0)
+            
+            return result
+            
+        except Exception as e:
+            logger.warning(f"Image enhancement failed: {e}")
+            return image
     
     def recognize_from_bytes(self, image_bytes: bytes) -> Dict[str, str]:
         """
