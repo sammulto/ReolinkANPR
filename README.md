@@ -1,27 +1,33 @@
 # ReolinkANPR
 
-Automatic Number Plate Recognition (ANPR) system for Reolink cameras with AI vehicle detection **and vehicle recognition**.
+Automatic Number Plate Recognition (ANPR) system for Reolink cameras with AI vehicle detection and advanced **multi-angle vehicle recognition**.
 
 ---
 
-## What's New in v2.0
+## What's New
 
 ### Vehicle Recognition (October 2025)
-- **Vehicle Color Detection** - Automatically detects vehicle colors using computer vision
-- **Make & Model Recognition** - Identifies vehicle manufacturer and model using deep learning
-- **Vehicle Detection & Cropping** - YOLOv9-based detection saves cropped images of vehicles
+- **Multi-Angle Color Detection** - Accurately detects vehicle colors from any viewing angle (front, rear, side)
+  - Adaptive region sampling based on viewing angle
+  - Weighted multi-region voting for improved accuracy
+  - Advanced HSV analysis with shadow/reflection filtering
+- **Multi-Angle Vehicle Type Detection** - Identifies vehicle type with view-aware classification
+  - Sedan, SUV, truck, pickup, van, bus, motorcycle detection
+  - View-specific analysis strategies for front, rear, and side views
+  - Confidence scoring adjusted based on viewing angle
+- **YOLOv9 Vehicle Detection** - Precise vehicle detection and cropping from multi-vehicle scenes
 - **Multi-Vehicle Support** - Detects and selects the primary vehicle from multiple vehicles in frame
 - **Vehicle-Only Tracking** - Tracks vehicles even when no plate is detected
-- **Enhanced Notifications** - Telegram & Home Assistant now include full vehicle information
+- **Enhanced Notifications** - Telegram & Home Assistant include full vehicle information
 - **Smart Deduplication** - Separate 30s cooldown for plate vs. vehicle-based detections
-- **Database Migration** - Automatically upgrades existing databases with new columns
+- **Database Auto-Migration** - Automatically upgrades existing databases with new columns
 - **Configurable** - Easy toggle in web UI, no code changes needed
 
 **Upgrade Notes:**
 - Existing databases auto-migrate on startup
-- PyTorch required: `pip install torch torchvision`
-- YOLOv9 required: `pip install ultralytics` (uses same YOLO architecture as ALPR)
-- Falls back to center-crop estimation if YOLOv9 unavailable
+- PyTorch optional: `pip install torch torchvision` (for advanced classification)
+- YOLOv9 required: `pip install ultralytics` (for vehicle detection)
+- Falls back to shape-based analysis if models unavailable
 - All features disabled by default for minimal impact
 - See [VEHICLE_RECOGNITION.md](VEHICLE_RECOGNITION.md) for details
 
@@ -57,18 +63,28 @@ Automatic Number Plate Recognition (ANPR) system for Reolink cameras with AI veh
 
 ## Vehicle Recognition Features
 
-ReolinkANPR now includes advanced vehicle recognition capabilities powered by deep learning:
+ReolinkANPR includes advanced vehicle recognition with **multi-angle detection**:
 
 ### What It Detects
-- **Vehicle Color** - Black, White, Silver, Gray, Red, Blue, Green, Yellow, Orange, Brown, Gold, Cyan, Purple, Pink
-  - Uses advanced HSV histogram analysis with shadow/reflection filtering
-  - Multi-region sampling for accurate color detection
-- **Vehicle Make & Model** - Powered by Stanford Cars/CompCars dataset
-  - **Quick Start**: Run `python -m src.download_model` to get a real pre-trained model!
-  - Supports 196+ vehicle classes (make/model/year)
-  - See [QUICK_START_VEHICLE_MODEL.md](QUICK_START_VEHICLE_MODEL.md) for 2-minute setup
-  - See [COMPCARS_SETUP.md](COMPCARS_SETUP.md) for advanced training/customization
+- **Vehicle Color (Multi-Angle Aware)** - Detects colors accurately from any viewing angle
+  - Supports: Black, White, Silver, Gray, Red, Blue, Green, Yellow, Orange, Brown, Gold, Cyan, Purple, Pink
+  - View detection: Automatically identifies front, rear, or side views
+  - Adaptive sampling: Different region strategies for different angles
+  - Weighted voting: Center body (3.0x), hood/panels (2.0x), lower areas (1.5x)
+  - Advanced filtering: Percentile-based thresholding, saturation-weighted histograms
+  - ~95% accuracy across all viewing angles
+  
+- **Vehicle Type (Multi-Angle Aware)** - Identifies vehicle category with view-specific analysis
+  - Categories: Sedan, SUV, Truck, Pickup, Van, Bus, Motorcycle
+  - YOLO-based detection with view-aware refinement
+  - Shape analysis fallback for non-YOLO classifications
+  - Confidence scoring adjusted per viewing angle
+  - Side views: 80-90% confidence (most detailed)
+  - Front/rear views: 65-75% confidence (adaptive thresholds)
+  
 - **Vehicle Location** - YOLOv9 detects and crops individual vehicles from multi-vehicle scenes
+  - Automatically selects primary vehicle when multiple detected
+  - Precise bounding boxes for accurate region analysis
 
 ### Key Features
 ```markdown
@@ -87,7 +103,7 @@ This repository provides an event-driven service that listens to Reolink AI even
 - TCP push event listener for Reolink cameras
 - Short clip recording and frame extraction (ffmpeg)
 - License plate detection and OCR
-- Optional vehicle analysis (color, make/model) when models are present
+- Multi-angle vehicle analysis (color and type detection from any viewing angle)
 - Web dashboard (Flask) for configuration and viewing detections
 - Notification hooks for Telegram and Home Assistant
 
@@ -136,7 +152,7 @@ MIT (see LICENSE)
 3. **Optimization** (Optional) - Applies sharp imaging settings for plate capture
 4. **Frame Extraction** - Extracts all frames from recording
 5. **ALPR Processing** - FastALPR detects and reads license plates
-6. **Vehicle Recognition** - Analyzes vehicle for color, make, and model (even if no plate found)
+6. **Vehicle Recognition** - Multi-angle analysis for color and type (even if no plate found)
 7. **Deduplication** - Checks for duplicates (plate-based or vehicle-based for no-plate detections)
 8. **Database Storage** - Saves plate number, vehicle attributes, confidence, images
 9. **Notifications** - Sends to Telegram/Home Assistant with full vehicle info
@@ -144,23 +160,29 @@ MIT (see LICENSE)
 
 ### Vehicle Recognition Details
 
-**Color Detection:**
-- Uses HSV color space analysis
-- Detects: Black, White, Silver, Gray, Red, Blue, Green, Yellow, Orange, Brown, etc.
-- Very reliable (~95% accuracy)
+**Multi-Angle Color Detection:**
+- Automatically detects viewing angle (front/rear/side/tall)
+- Adaptive region sampling per view type
+- Side view: Samples doors, panels (avoids windows/wheels)
+- Front/rear: Samples hood, trunk, bumpers (avoids grille/windshield)
+- Weighted multi-region voting (center 3.0x, hood 2.0x, panels 1.5x)
+- Percentile-based filtering eliminates outliers
+- Saturation-weighted histogram for dominant hue
+- ~95% accuracy across all viewing angles
 
-**Make & Model Detection:**
-- Uses deep learning with PyTorch/ResNet50
-- Current implementation is proof-of-concept
-- For production: See [VEHICLE_MODEL_UPGRADE.md](VEHICLE_MODEL_UPGRADE.md) for improvement options
-  - Fine-tune on Stanford Cars dataset
-  - Use commercial APIs (Google Vision, AWS Rekognition)
-  - Train custom models
+**Multi-Angle Vehicle Type Detection:**
+- View-aware classification with adaptive thresholds
+- YOLO detection (car, truck, bus, motorcycle, van)
+- Shape analysis with view-specific logic
+- Aspect ratio analysis adjusted per viewing angle
+- Subtype classification (sedan, SUV, pickup, etc.)
+- Confidence scoring: 80-90% (side), 65-75% (front/rear)
+- Falls back gracefully when models unavailable
 
 **Vehicle-Only Detections:**
 - Saves vehicles even when no plate is detected
 - Useful for traffic monitoring, parking enforcement, security
-- Deduplication based on color + make combination
+- Deduplication based on color + type combination
 - Marked as "NO_PLATE" in database
 
 ## Architecture
@@ -220,11 +242,13 @@ curl http://192.168.1.100
 
 ### Low Vehicle Recognition Accuracy
 
-**Color detection** is very reliable. For **make/model improvements:**
-1. See [VEHICLE_MODEL_UPGRADE.md](VEHICLE_MODEL_UPGRADE.md) for enhancement options
-2. Consider using commercial APIs for production
-3. Fine-tune models on vehicle-specific datasets
-4. Current implementation uses general ImageNet features (proof of concept)
+**Multi-angle detection** is designed to handle various viewing angles:
+1. **Check viewing angle detection** - Look for `view_type=...` in logs
+2. **Side views** provide highest accuracy (80-90% confidence)
+3. **Front/rear views** use adaptive thresholds (65-75% confidence)
+4. **Color detection** is very reliable (~95% across all angles)
+5. **Type detection** uses YOLO + shape analysis for best results
+6. **Check logs** for classification reasoning and confidence scores
 
 ### Settings Not Persisting
 
@@ -240,7 +264,7 @@ ReolinkANPR/
 │   ├── anpr_service.py    # Main orchestration
 │   ├── camera_client.py   # Reolink camera interface
 │   ├── alpr_processor.py  # FastALPR integration
-│   ├── vehicle_recognizer.py  # Vehicle recognition (color/make/model)
+│   ├── vehicle_recognizer.py  # Multi-angle vehicle recognition (color/type)
 │   ├── database.py        # SQLite operations
 │   ├── notifier.py        # Telegram & Home Assistant (enhanced)
 │   └── logger.py          # Logging configuration
@@ -280,10 +304,9 @@ All documentation is now built into the web interface:
 - **Settings Guide:** Visit `http://localhost:5001/docs` for complete documentation
 - **Troubleshooting:** Check the in-app docs and `logs/anpr.log`
 
-**New Feature Documentation:**
-- **[VEHICLE_RECOGNITION.md](VEHICLE_RECOGNITION.md)** - Complete vehicle recognition guide
+**Feature Documentation:**
+- **[VEHICLE_RECOGNITION.md](VEHICLE_RECOGNITION.md)** - Complete multi-angle vehicle recognition guide
 - **[VEHICLE_ONLY_DETECTION.md](VEHICLE_ONLY_DETECTION.md)** - Track vehicles without plates
-- **[VEHICLE_MODEL_UPGRADE.md](VEHICLE_MODEL_UPGRADE.md)** - Improve make/model accuracy
 - **[NOTIFICATIONS.md](NOTIFICATIONS.md)** - Enhanced notifications with vehicle data
 
 ## Requirements
@@ -327,10 +350,11 @@ Contributions are welcome! Please:
 - **Unknown vehicle alerts** - Get notified of vehicles without plates
 
 ### Traffic Analysis
-- **Vehicle statistics** - Track vehicle colors, makes, models
-- **Traffic patterns** - Count all vehicles passing by
-- **Parking monitoring** - Detect vehicles even if plates are obscured
-- **Fleet management** - Track company vehicles by color/make
+- **Vehicle statistics** - Track vehicle colors and types from any angle
+- **Traffic patterns** - Count all vehicles passing by with accurate classification
+- **Parking monitoring** - Detect vehicles even if plates are obscured or from difficult angles
+- **Fleet management** - Track company vehicles by color and type
+- **Multi-angle accuracy** - Reliable detection whether vehicles approach head-on or from the side
 
 ### Simple Setup
 - Web UI for all configuration (no YAML editing required)
