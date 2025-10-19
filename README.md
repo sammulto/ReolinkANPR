@@ -71,243 +71,62 @@ ReolinkANPR now includes advanced vehicle recognition capabilities powered by de
 - **Vehicle Location** - YOLOv9 detects and crops individual vehicles from multi-vehicle scenes
 
 ### Key Features
-- **Multi-Vehicle Processing** - Detects, crops, and analyzes ALL vehicles in frame
-- **Individual Recognition** - Each vehicle gets separate color/make/model analysis
-- **Separate Notifications** - Sends individual Telegram/HA notifications for each vehicle
-- **Cropped Analysis** - Uses cropped vehicle images for more accurate recognition
-- **Consistent Architecture** - Uses YOLOv9 for both plate and vehicle detection
-- **Track ALL Vehicles** - Even when no license plate is detected
-- **Smart Deduplication** - Separate logic for plates vs. vehicle-only detections
-- **Optional & Configurable** - Toggle on/off via web interface
-- **GPU Acceleration** - Automatically uses CUDA if available
-- **Fallback Mode** - Uses center-crop estimation if YOLOv9 unavailable
+```markdown
+# ReolinkANPR
 
-### Detection Methods
-1. **YOLOv9** (primary) - Accurate detection of cars, trucks, buses, motorcycles
-2. **Center-Crop** (fallback) - Simple estimation assuming vehicle in center of frame
+Lightweight Automatic Number Plate Recognition (ANPR) for Reolink cameras.
 
-### Multi-Vehicle Handling
-When multiple vehicles are detected in a single frame:
-- **Each vehicle is cropped** and saved as separate image
-- **Each vehicle is analyzed** independently for color/make/model
-- **Separate notifications** sent for each vehicle (e.g., "ABC123 (Vehicle 1/3)")
-- **Primary vehicle** used for database storage and dashboard display
-- **All vehicle data** preserved in `vehicles` array
+This repository provides an event-driven service that listens to Reolink AI events, records short clips, runs plate OCR, and (optionally) performs basic vehicle analysis. Over time the project accumulated legacy and duplicated documentation; this README is a concise, up-to-date entry point. For detailed feature-specific docs see the files in the repository root (VEHICLE_RECOGNITION.md, NOTIFICATIONS.md, etc.).
 
-### Saved Images
-For each detection, the system saves:
-1. **Full frame** - Complete camera view
-2. **Plate crop** - Cropped license plate (if detected)
-3. **Vehicle crops** - Cropped images for each detected vehicle (e.g., `*_vehicle_1.jpg`, `*_vehicle_2.jpg`)
+## What this README contains
+- Short overview and supported features
+- Quick start (minimal steps to run)
+- Where to find more detailed docs
 
-### Example Dashboard Entry
-```
-Plate: ABC123          Vehicle: Red | Toyota | Sedan
-```
+## Supported features (high-level)
+- TCP push event listener for Reolink cameras
+- Short clip recording and frame extraction (ffmpeg)
+- License plate detection and OCR
+- Optional vehicle analysis (color, make/model) when models are present
+- Web dashboard (Flask) for configuration and viewing detections
+- Notification hooks for Telegram and Home Assistant
 
-### Example Notification (Telegram)
-```
-🚗 Plate Detected: ABC123
-📊 Confidence: 95.2%
-Red | Toyota | Sedan
-[Album: Cropped Vehicle + Plate Crop]
-```
+## Quick start (minimal)
+Prerequisites: Python 3.8+ (3.11 recommended), ffmpeg. Optional: PyTorch for vehicle recognition.
 
-**Note:** Telegram receives two images when a plate is detected:
-- **Cropped vehicle image** (isolated vehicle for clarity)
-- **Cropped license plate** (zoomed plate for easy reading)
+1) Create and activate a virtual environment and install dependencies:
 
-**Multi-vehicle scenarios:** Each vehicle gets a separate notification with its own crop!
-
-**See [VEHICLE_RECOGNITION.md](VEHICLE_RECOGNITION.md) for complete documentation.**
-
-## Features
-
-- ✅ **Real-time Vehicle Detection** - Uses Reolink's built-in AI via TCP push events (Baichuan protocol)
-- ✅ **Automatic License Plate Recognition** - Powered by FastALPR with YOLO detection
-- ✅ **Vehicle Recognition** - Detects vehicle color, make, and model using deep learning
-- ✅ **Vehicle-Only Tracking** - Tracks all vehicles even when no plate is detected
-- ✅ **Smart Deduplication** - Prevents duplicate entries with 30-second cooldown (plate-based & vehicle-based)
-- ✅ **Smart Recording** - Optional camera settings optimization for plate capture
-- ✅ **Web Dashboard** - Modern dark/light theme UI with plate crops, vehicle info, and full images
-- ✅ **Enhanced Notifications** - Telegram & Home Assistant webhooks with vehicle information
-- ✅ **In-App Documentation** - Built-in guides for all settings
-- ✅ **Zero Polling** - Event-driven architecture for instant detection
-- ✅ **High Performance** - Processes 20 FPS with minimal CPU usage
-
-## Quick Start
-
-### Prerequisites
-
-- **Python 3.11+** (Required for TCP push event support)
-- **Reolink Camera** with AI vehicle detection enabled
-- **PyTorch** (Optional, for vehicle recognition - automatically uses CPU or GPU)
-- **ffmpeg** (for video recording)
-  ```bash
-  # Ubuntu/Debian
-  sudo apt install ffmpeg python3.11 python3.11-venv
-  
-  # macOS
-  brew install ffmpeg python@3.11
-  ```
-
-### Installation
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/Harky911/ReolinkANPR.git
-   cd ReolinkANPR
-   ```
-
-2. **Run the setup script:**
-   ```bash
-   chmod +x setup.sh
-   ./setup.sh
-   ```
-   
-   This will:
-   - Create a Python virtual environment
-   - Install all dependencies
-   - Create necessary directories
-   - Generate example configuration
-
-3. **Start the service:**
-   ```bash
-   python run.py
-   ```
-
-4. **Configure your camera via web UI:**
-   - Open `http://localhost:5001/config`
-   - Enter your camera details (IP, username, password)
-   - Save and restart the service
-   - All settings configurable through the web interface!
-
-5. **Access the web dashboard:**
-   ```
-   http://localhost:5001
-   ```
-
-## Configuration
-
-### Quick Setup via Dashboard
-
-**Step 1: Access Configuration Page**
 ```bash
-# Start the service
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+2) Copy the example config and edit it: `cp config.yaml.example config.yaml`
+
+3) Run the service:
+
+```bash
 python run.py
-
-# Open in your browser
-http://localhost:5001/config
 ```
 
-**Step 2: Configure Camera Settings**
-1. **Camera Name:** Give your camera a friendly name (e.g., "Front Door")
-2. **Camera IP/Host:** Enter your camera's IP address (e.g., `192.168.1.100`)
-3. **Username:** Usually `admin`
-4. **Password:** Your camera password (**Important:** Change from default!)
-5. **Camera Channel:** 
-   - `0` for standalone cameras
-   - `0, 1, 2...` for NVR channels
-6. **Recording Duration:** `6` seconds (adjust based on vehicle speed)
+4) Open the web UI: http://localhost:5001 (default)
 
-**Step 3: Configure ALPR Settings**
-1. **Detection Model:** Keep default `YOLO v9 Tiny 640`
-2. **OCR Model:** Keep default `CCT-S v1 Global`
-3. **Min Confidence:** `0.90` (90% confidence threshold)
-4. **Vehicle Recognition:** ✅ Enabled (detects color, make, model)
-5. **Track Vehicles Without Plates:** ✅ Enabled (tracks all vehicles)
+For configuration options and advanced guides, use the in-app documentation (http://localhost:5001/docs) or the topic-specific markdown files in the repository root.
 
-**Step 4: Save and Restart**
-1. Click **"Save Configuration"**
-2. Stop the service (Ctrl+C)
-3. Restart: `python run.py`
+## Where to find detailed docs
+- Vehicle recognition and models: VEHICLE_RECOGNITION.md, VEHICLE_MODEL_UPGRADE.md
+- Notifications and integrations: NOTIFICATIONS.md
+- Vehicle-only detections: VEHICLE_ONLY_DETECTION.md
+- Development notes and tests: CONtributing and test files in the repo
 
-**That's it!** Visit `http://localhost:5001` to see detections.
+## Contributing
+Please open issues or pull requests. Keep changes focused and include tests where applicable.
 
-### Optional: Camera Control Settings
+## License
+MIT (see LICENSE)
 
-Fine-tune camera ISP settings in real-time:
-
-1. Scroll to **"Camera Control Settings"**
-2. Adjust settings and click **"Apply Camera Settings"**:
-   - **Exposure Mode:** Auto (recommended) or Manual
-   - **Day/Night Mode:** Black & White (recommended for plates)
-   - **Gain/Shutter:** Only visible in Manual mode
-
-**💡 Tip:** Black & White mode works best for plate reading!
-
-### Optional: Notifications
-
-Enable Home Assistant or Telegram notifications with vehicle information:
-
-1. Scroll to **"Notifications"**
-2. Check **"Enable Notifications"**
-3. Configure your preferred method:
-   - **Home Assistant:** Enter webhook URL (receives full vehicle data)
-   - **Telegram:** Enter bot token and chat ID (receives photo with vehicle info)
-4. Click **"Save Configuration"**
-
-**Enhanced Notifications Include:**
-- Plate number (or "No Plate" for vehicle-only detections)
-- Confidence score
-- Vehicle color (e.g., "Red", "Blue", "Black")
-- Vehicle make (e.g., "Toyota", "Honda", "Ford")
-- Vehicle model (e.g., "Sedan", "SUV")
-
-**Example Telegram Message:**
 ```
-🚗 Plate Detected: ABC123
-📊 Confidence: 95.2%
-🎨 Red | 🏭 Toyota | 🚙 Sedan
-[Vehicle Photo]
-```
-
-See [NOTIFICATIONS.md](NOTIFICATIONS.md) for detailed setup and automation examples.
-
-### Optional: Advanced Recording Settings
-
-Optimize camera settings automatically during recording:
-
-1. Scroll to **"Advanced Recording Settings"**
-2. **Enable Before Recording Settings:**
-   - Exposure: Manual
-   - Day/Night: Black & White
-   - Gain: 1-40
-   - Shutter: 1-4 (fast shutter for moving vehicles)
-3. **Enable After Recording Settings:**
-   - Restore to Auto settings
-4. Click **"Save Recording Settings"**
-
-**💡 See In-App Documentation** (`http://localhost:5001/docs`) for detailed guides!
-
-## Web Dashboard
-
-The web dashboard provides:
-
-### Main Dashboard
-- Real-time detection feed
-- Recent plate recognitions
-- **Vehicle information** (color, make, model) displayed as badges
-- **"No Plate" detections** shown with yellow badge
-- Confidence scores and timestamps
-- Full-size vehicle images and plate crops
-- Searchable plate history
-
-### Configuration Page
-- Camera settings management
-- Real-time ISP control (exposure, gain, shutter, etc.)
-- Recording settings configuration
-- ALPR model selection
-- **Vehicle Recognition** - Toggle color/make/model detection
-- **Vehicle-Only Tracking** - Enable tracking without plates
-- **Notifications** - Configure Telegram & Home Assistant webhooks
-- All settings configurable via web UI (no manual YAML editing)
-
-### Documentation Page
-- Built-in guides for every setting
-- Quick tips for optimal ANPR performance
-- Home Assistant automation examples
-- Telegram bot setup instructions
 - **Vehicle recognition setup guide**
 
 ## How It Works
