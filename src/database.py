@@ -23,14 +23,21 @@ class Database:
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    plate_number TEXT NOT NULL,
-                    confidence REAL NOT NULL,
+                    plate_number TEXT,
+                    confidence REAL,
                     image_path TEXT,
                     plate_crop_path TEXT,
+                    vehicle_crop_path TEXT,
                     box_coordinates TEXT,
-                    frame_count INTEGER DEFAULT 1
+                    frame_count INTEGER DEFAULT 1,
+                    vehicle_color TEXT,
+                    vehicle_type TEXT,
+                    vehicle_confidence REAL
                 )
             ''')
+
+            # Migrate existing database: Add vehicle columns if they don't exist
+            await self._migrate_add_vehicle_columns(db)
 
             # Create index on timestamp for faster queries
             await db.execute('''
@@ -46,18 +53,63 @@ class Database:
 
             await db.commit()
 
+    async def _migrate_add_vehicle_columns(self, db):
+        """Add vehicle recognition columns to existing database if needed."""
+        try:
+            # Check if vehicle_color column exists
+            cursor = await db.execute("PRAGMA table_info(events)")
+            columns = await cursor.fetchall()
+            column_names = [col[1] for col in columns]
+            
+            # Add missing columns
+            if 'vehicle_color' not in column_names:
+                logger.info("Adding vehicle_color column to database...")
+                await db.execute('ALTER TABLE events ADD COLUMN vehicle_color TEXT')
+            
+            if 'vehicle_type' not in column_names:
+                logger.info("Adding vehicle_type column to database...")
+                await db.execute('ALTER TABLE events ADD COLUMN vehicle_type TEXT')
+            
+            if 'vehicle_confidence' not in column_names:
+                logger.info("Adding vehicle_confidence column to database...")
+                await db.execute('ALTER TABLE events ADD COLUMN vehicle_confidence REAL')
+            
+            if 'vehicle_crop_path' not in column_names:
+                logger.info("Adding vehicle_crop_path column to database...")
+                await db.execute('ALTER TABLE events ADD COLUMN vehicle_crop_path TEXT')
+            
+            await db.commit()
+            logger.info("Database migration completed successfully")
+            
+        except Exception as e:
+            logger.error(f"Error during database migration: {e}")
+
     async def add_event(self, event_data: Dict) -> int:
         """Add a new ANPR event to database with deduplication."""
         async with aiosqlite.connect(self.db_path) as db:
             plate_number = event_data.get('plate_number')
             
             # Check for duplicate within last 30 seconds
-            cursor = await db.execute('''
-                SELECT id, timestamp FROM events
-                WHERE plate_number = ?
-                ORDER BY timestamp DESC
-                LIMIT 1
-            ''', (plate_number,))
+            if plate_number and plate_number != 'NO_PLATE':
+                # Plate-based deduplication
+                cursor = await db.execute('''
+                    SELECT id, timestamp FROM events
+                    WHERE plate_number = ?
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                ''', (plate_number,))
+            else:
+                # Vehicle-only deduplication (by color and type)
+                vehicle_color = event_data.get('vehicle_color', 'unknown')
+                vehicle_type = event_data.get('vehicle_type', 'unknown')
+                cursor = await db.execute('''
+                    SELECT id, timestamp FROM events
+                    WHERE plate_number = 'NO_PLATE'
+                    AND vehicle_color = ?
+                    AND vehicle_type = ?
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                ''', (vehicle_color, vehicle_type))
             
             last_event = await cursor.fetchone()
             
@@ -67,22 +119,30 @@ class Database:
                 time_diff = (datetime.now() - last_time).total_seconds()
                 
                 if time_diff < 30:
-                    logger.info(f"Duplicate plate {plate_number} detected within 30s - skipping")
+                    if plate_number and plate_number != 'NO_PLATE':
+                        logger.info(f"Duplicate plate {plate_number} detected within 30s - skipping")
+                    else:
+                        logger.info(f"Duplicate vehicle ({event_data.get('vehicle_color')} {event_data.get('vehicle_type')}) detected within 30s - skipping")
                     return last_event[0]  # Return existing event ID
             
             # No duplicate found - insert new event
             cursor = await db.execute('''
                 INSERT INTO events
-                (plate_number, confidence, image_path, plate_crop_path,
-                 box_coordinates, frame_count)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (plate_number, confidence, image_path, plate_crop_path, vehicle_crop_path,
+                 box_coordinates, frame_count, vehicle_color, vehicle_type, 
+                 vehicle_confidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 plate_number,
                 event_data.get('confidence'),
                 event_data.get('image_path'),
                 event_data.get('plate_crop_path'),
+                event_data.get('vehicle_crop_path'),
                 json.dumps(event_data.get('box_coordinates', {})),
-                event_data.get('frame_count', 1)
+                event_data.get('frame_count', 1),
+                event_data.get('vehicle_color'),
+                event_data.get('vehicle_type'),
+                event_data.get('vehicle_confidence')
             ))
             await db.commit()
             return cursor.lastrowid

@@ -7,7 +7,14 @@ fast-alpr
 onnxruntime  # Required by fast-alpr
 opencv-python-headless
 numpy
+scipy  # For advanced color detection (gaussian filtering)
 PyYAML
+
+# Vehicle Recognition (Deep Learning)
+torch>=2.0.0
+torchvision>=0.15.0
+Pillow>=9.0.0
+ultralytics>=8.0.0  # YOLOv9 for vehicle detection (same architecture as ALPR)
 
 # Database and Web Interface
 aiosqlite>=0.19.0
@@ -19,6 +26,8 @@ aiohttp>=3.9.0  # Required for notifications (Telegram, Home Assistant)
 
 # Utilities
 python-dateutil
+tqdm>=4.65.0  # Progress bars for model downloads
+huggingface-hub>=0.20.0  # For downloading pre-trained models from HuggingFace
 
 # System Requirements (install separately):
 # - Python 3.11+ (REQUIRED for TCP push events via Baichuan protocol)

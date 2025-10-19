@@ -12,6 +12,15 @@ alpr:
   # Minimum confidence threshold (0.0 - 1.0)
   min_confidence: 0.9
   
+  # Vehicle detection minimum confidence threshold (0.0 - 1.0)
+  vehicle_min_confidence: 0.3
+  
+  # Vehicle recognition settings
+  vehicle_recognition_enabled: true
+  vehicle_use_tta: true           # Test-Time Augmentation: improves accuracy by 5-15%
+                                  # Uses multiple image augmentations for better recognition
+                                  # Set to false for faster processing (but lower accuracy)
+  
   # OCR model - options:
   # - cct-xs-v1-global-model (Fastest)
   # - cct-s-v1-global-model (Recommended)

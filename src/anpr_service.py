@@ -242,9 +242,9 @@ class ANPRService:
                 settings_result, frames = await asyncio.gather(settings_task, record_task)
                 
                 if settings_result:
-                    logger.info("✅ Before-recording settings applied during recording")
+                    logger.info("Before-recording settings applied during recording")
                 else:
-                    logger.warning("⚠️ Before-recording settings failed (recording still captured)")
+                    logger.warning("Before-recording settings failed (recording still captured)")
             else:
                 # No settings - just record
                 frames = await self.camera._record_rtsp_and_extract_frames(self.config.recording_duration)
@@ -254,9 +254,9 @@ class ANPRService:
                 logger.info("Restoring after-recording settings...")
                 success = await self.camera.apply_recording_settings('after')
                 if success:
-                    logger.info("✅ After-recording settings restored")
+                    logger.info("After-recording settings restored")
                 else:
-                    logger.warning("⚠️ After-recording settings failed")
+                    logger.warning("After-recording settings failed")
 
             # Process frames
             if frames:
@@ -272,35 +272,62 @@ class ANPRService:
         """Process vehicle detection frames through ALPR."""
 
         try:
-            # Process frames with ALPR
+            # Process frames with ALPR (now returns list of results, one per vehicle)
             save_dir = Path(self.config.database_path).parent
-            result = self.alpr.process_frames(frames, save_dir)
+            results = self.alpr.process_frames(frames, save_dir)
 
-            if result:
-                # Valid plate detected
-                logger.info(
-                    f"Plate recognized: {result['plate_number']} "
-                    f"(confidence: {result['confidence']:.2%})"
-                )
-
-                # Save to database
-                event_id = await self.database.add_event(result)
-                logger.info(f"Event saved to database (ID: {event_id})")
+            if results:
+                logger.info(f"Found {len(results)} vehicle(s) with plate/vehicle data")
                 
-                # Send notifications (only if it was actually saved, not a duplicate)
-                if event_id:
-                    # Convert relative image path to absolute for notifications
-                    image_path = result.get('image_path')
-                    if image_path:
-                        image_path = str(save_dir / image_path)
-                    
-                    await self.notifier.send_detection(
-                        result['plate_number'],
-                        result['confidence'],
-                        image_path
+                # Process each vehicle separately
+                for vehicle_idx, result in enumerate(results, 1):
+                    # Log what we found
+                    logger.info(
+                        f"Vehicle {vehicle_idx}/{len(results)}: "
+                        f"Plate={result['plate_number']} "
+                        f"(conf: {result['confidence']:.2%}), "
+                        f"Vehicle={result.get('vehicle_color', 'unknown')} "
+                        f"{result.get('vehicle_type', 'unknown')}"
                     )
+
+                    # Save to database (one entry per vehicle)
+                    event_id = await self.database.add_event(result)
+                    
+                    if event_id:
+                        logger.info(f"Vehicle {vehicle_idx} saved to database (ID: {event_id})")
+                        
+                        # Convert relative image paths to absolute for notifications
+                        image_path = result.get('image_path')
+                        if image_path:
+                            image_path = str(save_dir / image_path)
+                        
+                        plate_crop_path = result.get('plate_crop_path')
+                        if plate_crop_path:
+                            plate_crop_path = str(save_dir / plate_crop_path)
+                        
+                        vehicle_crop_path = result.get('vehicle_crop_path')
+                        if vehicle_crop_path:
+                            vehicle_crop_path = str(save_dir / vehicle_crop_path)
+                        
+                        # Send notification for this vehicle
+                        plate_display = result['plate_number']
+                        if len(results) > 1:
+                            plate_display = f"{result['plate_number']} (Vehicle {vehicle_idx}/{len(results)})"
+                        
+                        await self.notifier.send_detection(
+                            plate_display,
+                            result.get('confidence', 0.0),
+                            image_path,
+                            plate_crop_path,
+                            vehicle_crop_path,
+                            result.get('vehicle_color'),
+                            result.get('vehicle_type'),
+                            result.get('vehicle_confidence')
+                        )
+                    else:
+                        logger.debug(f"Vehicle {vehicle_idx} was duplicate, notification skipped")
             else:
-                logger.info("No valid plates found in frames")
+                logger.info("No valid plates or vehicles found in frames")
 
         except Exception as e:
             logger.error(f"Error processing detection: {e}")

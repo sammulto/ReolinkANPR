@@ -129,7 +129,38 @@
                                 <div class="col-md-6 mb-3">
                                     <label for="min_confidence" class="form-label">Minimum Confidence</label>
                                     <input type="number" class="form-control" id="min_confidence" min="0" max="1" step="0.01" required>
-                                    <small class="text-muted">Minimum confidence threshold (0.0 - 1.0)</small>
+                                    <small class="text-muted">Minimum confidence threshold for plate detection (0.0 - 1.0)</small>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label for="vehicle_min_confidence" class="form-label">Vehicle Detection Confidence</label>
+                                    <input type="number" class="form-control" id="vehicle_min_confidence" min="0" max="1" step="0.01" required>
+                                    <small class="text-muted">Minimum confidence threshold for vehicle detection (0.0 - 1.0)</small>
+                                </div>
+                            </div>
+                            
+                            <h5 class="card-title mb-3 mt-4">Vehicle Recognition</h5>
+                            <div class="row">
+                                <div class="col-md-12 mb-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="vehicle_recognition_enabled">
+                                        <label class="form-check-label" for="vehicle_recognition_enabled">
+                                            <strong>Enable Vehicle Recognition (Color, Make, Model)</strong>
+                                        </label>
+                                    </div>
+                                    <small class="text-muted d-block mt-2">
+                                        Analyzes vehicle images to detect color, make, and model. Requires PyTorch to be installed.
+                                    </small>
+                                </div>
+                                <div class="col-md-12 mb-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="vehicle_only_detection_enabled">
+                                        <label class="form-check-label" for="vehicle_only_detection_enabled">
+                                            <strong>Track Vehicles Without Plates</strong>
+                                        </label>
+                                    </div>
+                                    <small class="text-muted d-block mt-2">
+                                        Save vehicle info even when no license plate is detected. Useful for tracking all vehicles passing by.
+                                    </small>
                                 </div>
                             </div>
                         </div>
@@ -508,6 +539,9 @@
             document.getElementById('detection_model').value = config.alpr?.detection_model || 'yolo-v9-t-640-license-plate-end2end';
             document.getElementById('ocr_model').value = config.alpr?.ocr_model || 'cct-s-v1-global-model';
             document.getElementById('min_confidence').value = config.alpr?.min_confidence || 0.9;
+            document.getElementById('vehicle_min_confidence').value = config.alpr?.vehicle_min_confidence || 0.3;
+            document.getElementById('vehicle_recognition_enabled').checked = config.alpr?.vehicle_recognition_enabled !== false;
+            document.getElementById('vehicle_only_detection_enabled').checked = config.alpr?.vehicle_only_detection_enabled !== false;
 
             // System settings
             document.getElementById('log_level').value = config.system?.log_level || 'INFO';
@@ -690,7 +724,10 @@
             alpr: {
                 detection_model: document.getElementById('detection_model').value,
                 ocr_model: document.getElementById('ocr_model').value,
-                min_confidence: parseFloat(document.getElementById('min_confidence').value)
+                min_confidence: parseFloat(document.getElementById('min_confidence').value),
+                vehicle_min_confidence: parseFloat(document.getElementById('vehicle_min_confidence').value),
+                vehicle_recognition_enabled: document.getElementById('vehicle_recognition_enabled').checked,
+                vehicle_only_detection_enabled: document.getElementById('vehicle_only_detection_enabled').checked
             },
             system: {
                 log_level: document.getElementById('log_level').value,

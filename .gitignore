@@ -68,3 +68,6 @@ dist/
 .env
 .env.local
 nohup.out
+
+# Config backup
+bk.config.yaml
