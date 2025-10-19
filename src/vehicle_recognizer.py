@@ -454,6 +454,8 @@ class VehicleRecognizer:
     def _detect_color_enhanced(self, image: np.ndarray) -> str:
         """
         Enhanced color detection with lighting normalization and better sampling.
+        Uses multiple region sampling with weighted voting for improved accuracy.
+        Handles all viewing angles (front, rear, side) adaptively.
         
         Args:
             image: OpenCV image (BGR format) - should be cropped to vehicle
@@ -462,12 +464,15 @@ class VehicleRecognizer:
             Color name as string
         """
         try:
+            height, width = image.shape[:2]
+            aspect_ratio = width / height if height > 0 else 1.0
+            
             # Normalize lighting using LAB color space
             lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
             l, a, b = cv2.split(lab)
             
-            # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to L channel
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            # Apply CLAHE with optimized parameters for vehicle paint
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
             l_normalized = clahe.apply(l)
             
             # Merge back and convert to BGR
@@ -477,46 +482,147 @@ class VehicleRecognizer:
             # Convert normalized image to HSV
             hsv = cv2.cvtColor(normalized_bgr, cv2.COLOR_BGR2HSV)
             
-            # Get image dimensions
-            height, width = hsv.shape[:2]
+            # Detect vehicle orientation and adapt sampling strategy
+            view_type = self._detect_vehicle_view(hsv, aspect_ratio)
+            logger.debug(f"Detected view type: {view_type} (aspect: {aspect_ratio:.2f})")
             
-            # Sample from multiple body regions for better accuracy
-            regions = [
-                # Center body (primary)
-                hsv[int(height * 0.30):int(height * 0.70), int(width * 0.25):int(width * 0.75)],
-                # Upper body (hood area)
-                hsv[int(height * 0.20):int(height * 0.45), int(width * 0.30):int(width * 0.70)],
-                # Side panels
-                hsv[int(height * 0.35):int(height * 0.65), int(width * 0.15):int(width * 0.50)]
-            ]
+            # Define strategic sampling regions based on view type
+            regions_with_weights = self._get_sampling_regions_for_view(hsv, height, width, view_type)
             
-            # Collect color votes from each region
-            color_votes = []
-            for region in regions:
-                if region.size > 0:
+            # Collect weighted color votes from each region
+            color_votes = {}
+            total_weight = 0.0
+            
+            for region, weight, desc in regions_with_weights:
+                if region.size > 100:  # Ensure region has enough pixels
                     color = self._detect_color_from_region(region)
                     if color != 'unknown':
-                        color_votes.append(color)
+                        logger.debug(f"Region {desc}: {color} (weight: {weight})")
+                        color_votes[color] = color_votes.get(color, 0.0) + weight
+                        total_weight += weight
             
-            # Return most common color (voting system)
-            if color_votes:
-                from collections import Counter
-                color_counts = Counter(color_votes)
-                most_common = color_counts.most_common(1)[0]
-                # Require at least 2/3 agreement for confidence
-                if most_common[1] >= len(color_votes) * 0.5:
-                    return most_common[0]
+            # Return color with highest weighted vote
+            if color_votes and total_weight > 0:
+                # Sort by weighted votes
+                sorted_colors = sorted(color_votes.items(), key=lambda x: x[1], reverse=True)
+                winner = sorted_colors[0]
+                
+                # Require reasonable confidence (>40% of total weight)
+                if winner[1] / total_weight > 0.4:
+                    logger.debug(f"Color detection winner: {winner[0]} ({winner[1]/total_weight*100:.1f}% vote)")
+                    return winner[0]
+                
+                # If close call between two colors, use the more conservative one
+                if len(sorted_colors) > 1:
+                    first, second = sorted_colors[0], sorted_colors[1]
+                    if (first[1] - second[1]) / total_weight < 0.15:
+                        # Very close - prefer achromatic colors as they're more reliable
+                        if second[0] in ['black', 'white', 'gray', 'silver']:
+                            logger.debug(f"Close call, preferring achromatic: {second[0]}")
+                            return second[0]
+                
+                return winner[0]
             
             # Fallback to center region only
+            logger.debug("Weighted voting failed, using center region fallback")
             body_region = hsv[
-                int(height * 0.30):int(height * 0.70),
-                int(width * 0.25):int(width * 0.75)
+                int(height * 0.35):int(height * 0.65),
+                int(width * 0.30):int(width * 0.70)
             ]
             return self._detect_color_from_region(body_region)
             
         except Exception as e:
             logger.error(f"Error in enhanced color detection: {e}")
             return 'unknown'
+    
+    def _detect_vehicle_view(self, hsv: np.ndarray, aspect_ratio: float) -> str:
+        """
+        Detect vehicle viewing angle (front, rear, or side) based on aspect ratio and image features.
+        
+        Args:
+            hsv: HSV image of vehicle crop
+            aspect_ratio: Width/height ratio
+            
+        Returns:
+            View type: 'front', 'rear', 'side', or 'unknown'
+        """
+        try:
+            # Aspect ratio analysis:
+            # - Side view: wide (ratio > 1.4, typically 1.5-2.5)
+            # - Front/rear view: square-ish (ratio 0.8-1.4)
+            # - Very tall: might be partial crop or motorcycle
+            
+            if aspect_ratio > 1.4:
+                return 'side'
+            elif aspect_ratio < 0.7:
+                return 'tall'  # Unusual - might be partial/vertical crop
+            else:
+                # Could be front or rear - use additional heuristics
+                # For now, treat both the same as they have similar body panel layouts
+                return 'front_rear'
+                
+        except Exception as e:
+            logger.debug(f"Error detecting vehicle view: {e}")
+            return 'unknown'
+    
+    def _get_sampling_regions_for_view(
+        self, 
+        hsv: np.ndarray, 
+        height: int, 
+        width: int, 
+        view_type: str
+    ) -> list:
+        """
+        Get appropriate sampling regions based on detected vehicle view.
+        
+        Args:
+            hsv: HSV image
+            height: Image height
+            width: Image width
+            view_type: Detected view type
+            
+        Returns:
+            List of (region, weight, description) tuples
+        """
+        regions = []
+        
+        if view_type == 'side':
+            # Side view: Sample hood, doors, and rear panels
+            # Avoid windows (top third) and wheels (bottom)
+            regions = [
+                (hsv[int(height * 0.35):int(height * 0.65), int(width * 0.30):int(width * 0.70)], 3.0, "center_doors"),
+                (hsv[int(height * 0.30):int(height * 0.55), int(width * 0.20):int(width * 0.40)], 2.0, "front_panel"),
+                (hsv[int(height * 0.30):int(height * 0.55), int(width * 0.60):int(width * 0.80)], 2.0, "rear_panel"),
+                (hsv[int(height * 0.45):int(height * 0.70), int(width * 0.35):int(width * 0.65)], 1.5, "lower_body"),
+            ]
+        
+        elif view_type == 'front_rear':
+            # Front/rear view: Sample hood/trunk and bumper areas
+            # Avoid windshield/grille (top and very bottom)
+            regions = [
+                (hsv[int(height * 0.30):int(height * 0.60), int(width * 0.30):int(width * 0.70)], 3.5, "center_panel"),  # Hood or trunk
+                (hsv[int(height * 0.25):int(height * 0.50), int(width * 0.20):int(width * 0.45)], 2.0, "left_panel"),
+                (hsv[int(height * 0.25):int(height * 0.50), int(width * 0.55):int(width * 0.80)], 2.0, "right_panel"),
+                (hsv[int(height * 0.50):int(height * 0.75), int(width * 0.30):int(width * 0.70)], 1.5, "lower_panel"),  # Lower bumper area
+                (hsv[int(height * 0.15):int(height * 0.40), int(width * 0.35):int(width * 0.65)], 2.5, "upper_center"),  # Upper hood/trunk
+            ]
+        
+        elif view_type == 'tall':
+            # Vertical/tall crop: Sample center vertical strip
+            regions = [
+                (hsv[int(height * 0.30):int(height * 0.70), int(width * 0.25):int(width * 0.75)], 3.0, "center"),
+                (hsv[int(height * 0.20):int(height * 0.50), int(width * 0.30):int(width * 0.70)], 2.0, "upper"),
+                (hsv[int(height * 0.50):int(height * 0.80), int(width * 0.30):int(width * 0.70)], 2.0, "lower"),
+            ]
+        
+        else:  # unknown - use conservative central sampling
+            regions = [
+                (hsv[int(height * 0.30):int(height * 0.70), int(width * 0.30):int(width * 0.70)], 3.0, "center"),
+                (hsv[int(height * 0.25):int(height * 0.55), int(width * 0.35):int(width * 0.65)], 2.0, "upper_center"),
+                (hsv[int(height * 0.45):int(height * 0.75), int(width * 0.35):int(width * 0.65)], 2.0, "lower_center"),
+            ]
+        
+        return regions
     
     def _detect_color_basic(self, image: np.ndarray) -> str:
         """
@@ -659,7 +765,8 @@ class VehicleRecognizer:
     
     def _detect_color_from_region(self, region: np.ndarray) -> str:
         """
-        Detect color from a specific HSV region.
+        Detect color from a specific HSV region with improved accuracy.
+        Uses histogram analysis and percentile-based filtering for robustness.
         
         Args:
             region: HSV image region
@@ -674,55 +781,133 @@ class VehicleRecognizer:
             # Split HSV channels
             h, s, v = cv2.split(region)
             
-            # Filter out very dark and very bright pixels
-            mask = (v > 20) & (v < 235)
+            # Filter out extreme values (shadows, reflections, windows)
+            # Use percentile-based filtering for better robustness
+            v_p10 = np.percentile(v, 10)
+            v_p90 = np.percentile(v, 90)
             
-            if np.sum(mask) < 50:
+            # More aggressive filtering of shadows and highlights
+            mask = (v > max(25, v_p10)) & (v < min(230, v_p90))
+            
+            # Also filter out very saturated pixels (likely reflections or artifacts)
+            mask = mask & (s < 250)
+            
+            valid_pixels = np.sum(mask)
+            if valid_pixels < 50:
                 return 'unknown'
             
             filtered_h = h[mask]
             filtered_s = s[mask]
             filtered_v = v[mask]
             
-            # Calculate median values
-            median_saturation = np.median(filtered_s)
-            median_value = np.median(filtered_v)
-            median_hue = np.median(filtered_h)
+            # Use percentile instead of median for better outlier resistance
+            p50_saturation = np.percentile(filtered_s, 50)  # Median
+            p50_value = np.percentile(filtered_v, 50)
+            p50_hue = np.percentile(filtered_h, 50)
             
-            # Detect achromatic colors
-            if median_saturation < 45:
-                if median_value < 60:
+            # Also track lower percentiles to detect dark colors better
+            p25_value = np.percentile(filtered_v, 25)
+            
+            logger.debug(f"Region stats - H:{p50_hue:.1f} S:{p50_saturation:.1f} V:{p50_value:.1f} (V25:{p25_value:.1f}, pixels:{valid_pixels})")
+            
+            # Detect achromatic colors (low saturation)
+            # Improved thresholds based on real vehicle paint characteristics
+            if p50_saturation < 50:  # Low saturation indicates achromatic
+                # Black: Dark with low saturation
+                if p50_value < 70:
                     return 'black'
-                elif median_value > 200:
+                # White: Very bright with low saturation
+                elif p50_value > 190:
                     return 'white'
-                elif median_value > 140:
+                # Silver: Bright metallic look (high value, low saturation, higher than gray)
+                elif p50_value > 130 and p25_value > 90:
+                    return 'silver'
+                # Gray: Mid-range brightness
+                else:
+                    return 'gray'
+            
+            # For chromatic colors, use more aggressive filtering
+            # Only use pixels with sufficient saturation and reasonable brightness
+            chromatic_mask = (s > 50) & (v > 35) & (v < 210)
+            chromatic_pixels = np.sum(chromatic_mask)
+            
+            if chromatic_pixels < 50:
+                # Not enough chromatic content - treat as achromatic
+                if p50_value < 80:
+                    return 'black'
+                elif p50_value > 170:
+                    return 'white'
+                elif p50_value > 120:
                     return 'silver'
                 else:
                     return 'gray'
             
-            # For chromatic colors
-            chromatic_mask = (s > 40) & (v > 30) & (v < 220)
-            if np.sum(chromatic_mask) < 50:
-                return 'unknown'
-            
             chromatic_h = h[chromatic_mask]
+            chromatic_s = s[chromatic_mask]
+            chromatic_v = v[chromatic_mask]
             
-            # Determine dominant hue range
-            median_hue = np.median(chromatic_h)
+            # Calculate dominant hue using weighted histogram
+            # Weight by saturation - more saturated pixels are more reliable
+            hist_weighted = np.zeros(180)
+            for hue_val, sat_val in zip(chromatic_h.flatten(), chromatic_s.flatten()):
+                hist_weighted[hue_val] += (sat_val / 255.0)  # Weight by saturation
             
-            # Hue ranges (0-180 in OpenCV)
-            if median_hue < 10 or median_hue > 170:
+            # Smooth histogram to reduce noise
+            from scipy.ndimage import gaussian_filter1d
+            hist_smooth = gaussian_filter1d(hist_weighted, sigma=4)
+            
+            # Find dominant hue
+            dominant_hue = np.argmax(hist_smooth)
+            hue_strength = hist_smooth[dominant_hue] / (np.sum(hist_smooth) + 1e-6)
+            
+            median_sat = np.median(chromatic_s)
+            median_val = np.median(chromatic_v)
+            
+            logger.debug(f"Chromatic analysis - Dominant hue: {dominant_hue}, strength: {hue_strength:.2f}, S:{median_sat:.0f}, V:{median_val:.0f}")
+            
+            # Improved color classification with better boundaries
+            # Red: 0-12 and 165-180 (wraps around)
+            if dominant_hue < 12 or dominant_hue >= 165:
+                # Distinguish red from brown/maroon
+                if median_sat < 90 and median_val < 110:
+                    return 'brown'
+                elif median_val < 90:  # Dark red
+                    return 'red'
                 return 'red'
-            elif median_hue < 25:
+            
+            # Orange: 12-22
+            elif dominant_hue < 22:
+                if median_sat < 100 and median_val < 100:
+                    return 'brown'
                 return 'orange'
-            elif median_hue < 35:
+            
+            # Yellow/Gold: 22-38
+            elif dominant_hue < 38:
+                if median_sat < 90 or median_val < 130:
+                    return 'gold'
                 return 'yellow'
-            elif median_hue < 85:
+            
+            # Green: 38-85
+            elif dominant_hue < 85:
                 return 'green'
-            elif median_hue < 130:
+            
+            # Cyan/Turquoise: 85-100
+            elif dominant_hue < 100:
+                return 'cyan'
+            
+            # Blue: 100-135
+            elif dominant_hue < 135:
                 return 'blue'
-            else:
+            
+            # Purple/Magenta/Pink: 135-165
+            elif dominant_hue < 165:
+                # Pink is lighter/more desaturated purple
+                if median_val > 160 and median_sat < 140:
+                    return 'pink'
                 return 'purple'
+            
+            # Fallback
+            return 'unknown'
                 
         except Exception as e:
             logger.error(f"Error in region color detection: {e}")
@@ -730,7 +915,8 @@ class VehicleRecognizer:
     
     def _detect_vehicle_type(self, image: np.ndarray) -> tuple[str, float]:
         """
-        Detect vehicle type (sedan, suv, pickup, truck, van, etc) using aspect ratio and shape analysis.
+        Detect vehicle type (sedan, suv, pickup, truck, van, etc) using multi-angle aware classification.
+        Adapts detection strategy based on viewing angle (front, rear, side).
         
         Args:
             image: OpenCV image (BGR format) - should be cropped to vehicle
@@ -744,39 +930,50 @@ class VehicleRecognizer:
             # Calculate aspect ratio
             aspect_ratio = width / height if height > 0 else 0
             
-            # Analyze vehicle profile using YOLO detection classes
-            # The YOLO model already gives us vehicle class information
-            # We can use that or do additional shape analysis
+            # Detect viewing angle for adaptive type classification
+            hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+            view_type = self._detect_vehicle_view(hsv, aspect_ratio)
             
-            # For now, let's use a hybrid approach:
-            # 1. Check YOLO class if available (from self.yolo_model)
-            # 2. Fall back to aspect ratio and shape analysis
+            logger.debug(f"Type detection - View: {view_type}, Aspect: {aspect_ratio:.2f}")
             
-            vehicle_type = self._classify_by_yolo_and_shape(image, aspect_ratio)
+            # Use hybrid approach with view-aware analysis:
+            # 1. Check YOLO class if available
+            # 2. Apply view-specific shape analysis
+            # 3. Combine for final classification
             
-            # Confidence based on aspect ratio clarity
-            # Clear ratios give higher confidence
-            if aspect_ratio < 0.5 or aspect_ratio > 3.0:
-                confidence = 0.95  # Very clear (extreme ratios)
-            elif aspect_ratio < 1.2 or aspect_ratio > 2.2:
-                confidence = 0.85  # Clear
+            vehicle_type = self._classify_by_yolo_and_shape(image, aspect_ratio, view_type)
+            
+            # Confidence based on view clarity and aspect ratio
+            # Side views give more reliable type identification
+            if view_type == 'side':
+                if aspect_ratio > 2.2 or aspect_ratio < 1.2:
+                    confidence = 0.90  # Clear side view with distinct ratio
+                else:
+                    confidence = 0.80  # Good side view
+            elif view_type == 'front_rear':
+                # Front/rear views are less reliable for type
+                if aspect_ratio < 0.9 or aspect_ratio > 1.3:
+                    confidence = 0.75  # Some width/height variation helps
+                else:
+                    confidence = 0.65  # Square crops harder to classify
             else:
-                confidence = 0.70  # Moderate (middle range is ambiguous)
+                confidence = 0.70  # Unknown view - moderate confidence
             
-            logger.debug(f"Vehicle type: {vehicle_type} (aspect ratio: {aspect_ratio:.2f}, conf: {confidence:.2f})")
+            logger.debug(f"Vehicle type: {vehicle_type} (conf: {confidence:.2f})")
             return vehicle_type, confidence
             
         except Exception as e:
             logger.error(f"Error detecting vehicle type: {e}")
             return 'unknown', 0.0
     
-    def _classify_by_yolo_and_shape(self, image: np.ndarray, aspect_ratio: float) -> str:
+    def _classify_by_yolo_and_shape(self, image: np.ndarray, aspect_ratio: float, view_type: str) -> str:
         """
-        Classify vehicle type using YOLO detection and shape analysis.
+        Classify vehicle type using YOLO detection and view-aware shape analysis.
         
         Args:
             image: OpenCV image (BGR format)
             aspect_ratio: Width/height ratio of vehicle crop
+            view_type: Detected viewing angle (front, rear, side, etc.)
             
         Returns:
             Vehicle type as string
@@ -795,24 +992,11 @@ class VehicleRecognizer:
                         if conf > 0.3:  # Reasonable confidence
                             # COCO dataset classes:
                             if cls == 2:  # car
-                                # Distinguish sedan vs hatchback vs coupe by aspect ratio
-                                if aspect_ratio > 1.8:
-                                    logger.debug(f"Detection method: YOLO (car) + aspect ratio → sedan")
-                                    return 'sedan'
-                                elif aspect_ratio > 1.5:
-                                    logger.debug(f"Detection method: YOLO (car) + aspect ratio → hatchback")
-                                    return 'hatchback'
-                                else:
-                                    logger.debug(f"Detection method: YOLO (car) + aspect ratio → coupe")
-                                    return 'coupe'
+                                # Distinguish sedan vs hatchback vs coupe by aspect ratio and view
+                                return self._classify_car_subtype(aspect_ratio, view_type)
                             elif cls == 7:  # truck
                                 # Check if it's a pickup or semi
-                                if aspect_ratio > 2.0:
-                                    logger.debug(f"Detection method: YOLO (truck) + aspect ratio → truck")
-                                    return 'truck'
-                                else:
-                                    logger.debug(f"Detection method: YOLO (truck) + aspect ratio → pickup")
-                                    return 'pickup'
+                                return self._classify_truck_subtype(aspect_ratio, view_type)
                             elif cls == 5:  # bus
                                 logger.debug(f"Detection method: YOLO (bus)")
                                 return 'bus'
@@ -822,19 +1006,20 @@ class VehicleRecognizer:
             
             # Fallback to shape-based classification
             logger.debug(f"Detection method: Shape analysis (YOLO not available or no match)")
-            return self._classify_by_shape(image, aspect_ratio)
+            return self._classify_by_shape(image, aspect_ratio, view_type)
             
         except Exception as e:
             logger.warning(f"YOLO classification failed, using shape analysis: {e}")
-            return self._classify_by_shape(image, aspect_ratio)
+            return self._classify_by_shape(image, aspect_ratio, view_type)
     
-    def _classify_by_shape(self, image: np.ndarray, aspect_ratio: float) -> str:
+    def _classify_by_shape(self, image: np.ndarray, aspect_ratio: float, view_type: str = 'side') -> str:
         """
         Classify vehicle type based on shape analysis (aspect ratio and proportions).
         
         Args:
             image: OpenCV image (BGR format)
             aspect_ratio: Width/height ratio
+            view_type: Viewing angle ('side', 'front', 'rear', 'tall')
             
         Returns:
             Vehicle type as string
@@ -842,68 +1027,169 @@ class VehicleRecognizer:
         try:
             height, width = image.shape[:2]
             
-            # Analyze vertical profile (how tall is the vehicle relative to width)
-            # This helps distinguish SUVs/vans from sedans/trucks
+            # View-aware shape classification
+            logger.debug(f"Shape analysis with view_type={view_type}, aspect_ratio={aspect_ratio:.2f}")
             
-            # Very wide and low: likely sedan/sports car
-            if aspect_ratio > 2.2:
-                logger.debug(f"Shape analysis: Very wide aspect ratio ({aspect_ratio:.2f}) → sedan")
-                return 'sedan'
-            
-            # Wide and medium height: sedan/wagon
-            elif aspect_ratio > 1.8:
-                # Check upper half fullness to distinguish sedan vs wagon
-                upper_half = image[0:height//2, :]
-                lower_half = image[height//2:, :]
-                
-                # Simple brightness comparison (vehicles are usually darker on top)
-                upper_brightness = np.mean(upper_half)
-                lower_brightness = np.mean(lower_half)
-                
-                if upper_brightness < lower_brightness * 0.8:
-                    logger.debug(f"Shape analysis: Wide ({aspect_ratio:.2f}) + darker top → sedan")
+            if view_type == 'side':
+                # Side view: aspect ratio is highly informative
+                if aspect_ratio > 2.2:
+                    logger.debug(f"Shape (side): Very wide ({aspect_ratio:.2f}) → sedan")
                     return 'sedan'
-                else:
-                    logger.debug(f"Shape analysis: Wide ({aspect_ratio:.2f}) + uniform brightness → wagon")
-                    return 'wagon'
-            
-            # Medium aspect ratio: could be SUV, pickup, van
-            elif aspect_ratio > 1.4:
-                # Analyze the rear portion to distinguish pickup trucks
-                # Pickups usually have an open bed (brighter/different color in back third)
-                rear_third = image[:, int(width * 0.66):]
-                front_two_thirds = image[:, :int(width * 0.66)]
-                
-                rear_std = np.std(rear_third)
-                front_std = np.std(front_two_thirds)
-                
-                # Open pickup bed has more variation
-                if rear_std > front_std * 1.3:
-                    logger.debug(f"Shape analysis: Medium ({aspect_ratio:.2f}) + bed variation → pickup")
-                    return 'pickup'
-                
-                # Otherwise likely SUV or van
-                # Vans are usually taller and boxier
-                if aspect_ratio < 1.6:
-                    logger.debug(f"Shape analysis: Medium-square ({aspect_ratio:.2f}) → van")
+                elif aspect_ratio > 1.8:
+                    # Check upper/lower brightness for sedan vs wagon
+                    upper_half = image[0:height//2, :]
+                    lower_half = image[height//2:, :]
+                    upper_brightness = np.mean(upper_half)
+                    lower_brightness = np.mean(lower_half)
+                    
+                    if upper_brightness < lower_brightness * 0.8:
+                        logger.debug(f"Shape (side): Wide + darker top → sedan")
+                        return 'sedan'
+                    else:
+                        logger.debug(f"Shape (side): Wide + uniform → wagon")
+                        return 'wagon'
+                elif aspect_ratio > 1.5:
+                    # Check for pickup bed variation
+                    rear_third = image[:, int(width * 0.66):]
+                    front_two_thirds = image[:, :int(width * 0.66)]
+                    rear_std = np.std(rear_third)
+                    front_std = np.std(front_two_thirds)
+                    
+                    if rear_std > front_std * 1.3:
+                        logger.debug(f"Shape (side): Bed variation → pickup")
+                        return 'pickup'
+                    else:
+                        logger.debug(f"Shape (side): Medium → suv")
+                        return 'suv'
+                elif aspect_ratio > 1.2:
+                    logger.debug(f"Shape (side): Square → van")
                     return 'van'
                 else:
-                    logger.debug(f"Shape analysis: Medium ({aspect_ratio:.2f}) → suv")
+                    logger.debug(f"Shape (side): Tall → bus/truck")
+                    return 'truck'
+                    
+            elif view_type in ['front', 'rear']:
+                # Front/rear view: height vs width matters more
+                if aspect_ratio < 0.8:
+                    logger.debug(f"Shape (front/rear): Very tall ({aspect_ratio:.2f}) → truck/van")
+                    return 'van'
+                elif aspect_ratio < 1.1:
+                    logger.debug(f"Shape (front/rear): Tall → suv")
                     return 'suv'
-            
-            # Square-ish: van or box truck
-            elif aspect_ratio > 1.0:
-                logger.debug(f"Shape analysis: Square-ish ({aspect_ratio:.2f}) → van")
-                return 'van'
-            
-            # Tall and narrow: could be motorcycle, bus front view, or unusual angle
-            else:
-                logger.debug(f"Shape analysis: Tall/narrow ({aspect_ratio:.2f}) → other")
-                return 'other'
+                elif aspect_ratio < 1.4:
+                    logger.debug(f"Shape (front/rear): Medium → sedan")
+                    return 'sedan'
+                else:
+                    logger.debug(f"Shape (front/rear): Wide → car")
+                    return 'car'
+                    
+            else:  # 'tall' or unknown view
+                # Limited information, use basic classification
+                if aspect_ratio < 0.7:
+                    logger.debug(f"Shape (tall): Very tall ({aspect_ratio:.2f}) → truck")
+                    return 'truck'
+                elif aspect_ratio < 1.0:
+                    logger.debug(f"Shape (tall): Square → van")
+                    return 'van'
+                else:
+                    logger.debug(f"Shape (tall): Wide → car")
+                    return 'car'
                 
         except Exception as e:
             logger.error(f"Shape classification failed: {e}")
             return 'unknown'
+    
+    def _classify_car_subtype(self, aspect_ratio: float, view_type: str) -> str:
+        """
+        Classify car subtype based on aspect ratio and viewing angle.
+        
+        Args:
+            aspect_ratio: Width/height ratio of the vehicle bounding box
+            view_type: 'side', 'front', 'rear', or 'tall'
+            
+        Returns:
+            Car subtype: 'sedan', 'hatchback', 'coupe', 'suv', 'wagon'
+        """
+        try:
+            if view_type == 'side':
+                # Side view: aspect ratio is very informative
+                if aspect_ratio > 2.2:
+                    return 'sedan'  # Long and low
+                elif aspect_ratio > 1.9:
+                    return 'wagon'  # Long but slightly taller
+                elif aspect_ratio > 1.5:
+                    return 'hatchback'  # Shorter, more compact
+                elif aspect_ratio > 1.2:
+                    return 'suv'  # Taller, boxier
+                else:
+                    return 'car'  # Generic fallback
+                    
+            elif view_type in ['front', 'rear']:
+                # Front/rear view: aspect ratio less definitive
+                if aspect_ratio < 0.9:
+                    return 'suv'  # Tall and wide (SUV/crossover)
+                elif aspect_ratio < 1.1:
+                    return 'sedan'  # Medium height
+                elif aspect_ratio < 1.3:
+                    return 'hatchback'  # Slightly narrower
+                else:
+                    return 'coupe'  # Narrow and low
+                    
+            else:  # 'tall' or unknown view
+                # Very limited information, use generic classification
+                if aspect_ratio < 0.7:
+                    return 'suv'
+                else:
+                    return 'car'
+                    
+        except Exception as e:
+            logger.error(f"Car subtype classification failed: {e}")
+            return 'car'
+    
+    def _classify_truck_subtype(self, aspect_ratio: float, view_type: str) -> str:
+        """
+        Classify truck subtype based on aspect ratio and viewing angle.
+        
+        Args:
+            aspect_ratio: Width/height ratio of the vehicle bounding box
+            view_type: 'side', 'front', 'rear', or 'tall'
+            
+        Returns:
+            Truck subtype: 'pickup', 'truck', 'semi', 'van'
+        """
+        try:
+            if view_type == 'side':
+                # Side view: long vehicles with open bed = pickup
+                if aspect_ratio > 2.0:
+                    return 'semi'  # Very long (tractor-trailer)
+                elif aspect_ratio > 1.6:
+                    return 'pickup'  # Moderately long with cab + bed
+                elif aspect_ratio > 1.3:
+                    return 'van'  # Box-like enclosed cargo
+                else:
+                    return 'truck'  # Generic truck
+                    
+            elif view_type in ['front', 'rear']:
+                # Front/rear view: height and width matter
+                if aspect_ratio < 0.8:
+                    return 'truck'  # Very tall (large truck)
+                elif aspect_ratio < 1.0:
+                    return 'van'  # Tall but more squared
+                elif aspect_ratio < 1.3:
+                    return 'pickup'  # Standard height
+                else:
+                    return 'truck'  # Generic fallback
+                    
+            else:  # 'tall' or unknown view
+                # Limited information
+                if aspect_ratio < 0.6:
+                    return 'truck'  # Very tall
+                else:
+                    return 'van'
+                    
+        except Exception as e:
+            logger.error(f"Truck subtype classification failed: {e}")
+            return 'truck'
     
     def _classify_vehicle(self, image: np.ndarray) -> tuple[str, str]:
         """
