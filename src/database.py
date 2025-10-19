@@ -31,8 +31,7 @@ class Database:
                     box_coordinates TEXT,
                     frame_count INTEGER DEFAULT 1,
                     vehicle_color TEXT,
-                    vehicle_make TEXT,
-                    vehicle_model TEXT,
+                    vehicle_type TEXT,
                     vehicle_confidence REAL
                 )
             ''')
@@ -67,13 +66,9 @@ class Database:
                 logger.info("Adding vehicle_color column to database...")
                 await db.execute('ALTER TABLE events ADD COLUMN vehicle_color TEXT')
             
-            if 'vehicle_make' not in column_names:
-                logger.info("Adding vehicle_make column to database...")
-                await db.execute('ALTER TABLE events ADD COLUMN vehicle_make TEXT')
-            
-            if 'vehicle_model' not in column_names:
-                logger.info("Adding vehicle_model column to database...")
-                await db.execute('ALTER TABLE events ADD COLUMN vehicle_model TEXT')
+            if 'vehicle_type' not in column_names:
+                logger.info("Adding vehicle_type column to database...")
+                await db.execute('ALTER TABLE events ADD COLUMN vehicle_type TEXT')
             
             if 'vehicle_confidence' not in column_names:
                 logger.info("Adding vehicle_confidence column to database...")
@@ -104,17 +99,17 @@ class Database:
                     LIMIT 1
                 ''', (plate_number,))
             else:
-                # Vehicle-only deduplication (by color and make)
+                # Vehicle-only deduplication (by color and type)
                 vehicle_color = event_data.get('vehicle_color', 'unknown')
-                vehicle_make = event_data.get('vehicle_make', 'unknown')
+                vehicle_type = event_data.get('vehicle_type', 'unknown')
                 cursor = await db.execute('''
                     SELECT id, timestamp FROM events
                     WHERE plate_number = 'NO_PLATE'
                     AND vehicle_color = ?
-                    AND vehicle_make = ?
+                    AND vehicle_type = ?
                     ORDER BY timestamp DESC
                     LIMIT 1
-                ''', (vehicle_color, vehicle_make))
+                ''', (vehicle_color, vehicle_type))
             
             last_event = await cursor.fetchone()
             
@@ -127,16 +122,16 @@ class Database:
                     if plate_number and plate_number != 'NO_PLATE':
                         logger.info(f"Duplicate plate {plate_number} detected within 30s - skipping")
                     else:
-                        logger.info(f"Duplicate vehicle ({event_data.get('vehicle_color')} {event_data.get('vehicle_make')}) detected within 30s - skipping")
+                        logger.info(f"Duplicate vehicle ({event_data.get('vehicle_color')} {event_data.get('vehicle_type')}) detected within 30s - skipping")
                     return last_event[0]  # Return existing event ID
             
             # No duplicate found - insert new event
             cursor = await db.execute('''
                 INSERT INTO events
                 (plate_number, confidence, image_path, plate_crop_path, vehicle_crop_path,
-                 box_coordinates, frame_count, vehicle_color, vehicle_make, 
-                 vehicle_model, vehicle_confidence)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 box_coordinates, frame_count, vehicle_color, vehicle_type, 
+                 vehicle_confidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 plate_number,
                 event_data.get('confidence'),
@@ -146,8 +141,7 @@ class Database:
                 json.dumps(event_data.get('box_coordinates', {})),
                 event_data.get('frame_count', 1),
                 event_data.get('vehicle_color'),
-                event_data.get('vehicle_make'),
-                event_data.get('vehicle_model'),
+                event_data.get('vehicle_type'),
                 event_data.get('vehicle_confidence')
             ))
             await db.commit()

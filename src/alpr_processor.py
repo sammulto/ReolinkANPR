@@ -105,7 +105,7 @@ class ALPRProcessor:
                 # Vehicle with plate detected
                 logger.info(f"Vehicle {vehicle_idx}: {best_plate['plate_text']} "
                           f"(plate conf: {best_plate['confidence']:.3f}, "
-                          f"vehicle: {aggregated_vehicle['color']} {aggregated_vehicle['make']} {aggregated_vehicle['model']})")
+                          f"vehicle: {aggregated_vehicle['color']} {aggregated_vehicle['type']})")
                 
                 # Save images
                 image_filename = f"{timestamp}_{best_plate['plate_text']}_vehicle_{vehicle_idx}.jpg"
@@ -131,19 +131,18 @@ class ALPRProcessor:
                     'box_coordinates': best_plate['bbox'],
                     'frame_count': len(frame_bytes_list),
                     'vehicle_color': aggregated_vehicle['color'],
-                    'vehicle_make': aggregated_vehicle['make'],
-                    'vehicle_model': aggregated_vehicle['model'],
+                    'vehicle_type': aggregated_vehicle['type'],
                     'vehicle_confidence': aggregated_vehicle['confidence'],
                     'vehicle_bbox': track['best_detection']['bbox']
                 })
             else:
                 # Vehicle without plate (vehicle-only detection)
                 logger.info(f"Vehicle {vehicle_idx}: No plate detected "
-                          f"(vehicle: {aggregated_vehicle['color']} {aggregated_vehicle['make']} {aggregated_vehicle['model']})")
+                          f"(vehicle: {aggregated_vehicle['color']} {aggregated_vehicle['type']})")
                 
                 if self.config.vehicle_only_detection_enabled:
                     # Save images for vehicle-only detection
-                    vehicle_desc = f"{aggregated_vehicle['color']}_{aggregated_vehicle['make']}"
+                    vehicle_desc = f"{aggregated_vehicle['color']}_{aggregated_vehicle['type']}"
                     image_filename = f"{timestamp}_NO_PLATE_{vehicle_desc}_vehicle_{vehicle_idx}.jpg"
                     vehicle_crop_filename = f"{timestamp}_NO_PLATE_{vehicle_desc}_crop_{vehicle_idx}.jpg"
                     
@@ -166,8 +165,7 @@ class ALPRProcessor:
                         'box_coordinates': {},
                         'frame_count': len(frame_bytes_list),
                         'vehicle_color': aggregated_vehicle['color'],
-                        'vehicle_make': aggregated_vehicle['make'],
-                        'vehicle_model': aggregated_vehicle['model'],
+                        'vehicle_type': aggregated_vehicle['type'],
                         'vehicle_confidence': aggregated_vehicle['confidence'],
                         'vehicle_bbox': best_det['bbox']
                     })
@@ -307,8 +305,7 @@ class ALPRProcessor:
                         'bbox': None,
                         'detection_confidence': 0.0,
                         'color': 'unknown',
-                        'make': 'unknown',
-                        'model': 'unknown',
+                        'type': 'unknown',
                         'confidence': 0.0
                     })
 
@@ -318,8 +315,7 @@ class ALPRProcessor:
                 'bbox': None,
                 'detection_confidence': 0.0,
                 'color': 'unknown',
-                'make': 'unknown',
-                'model': 'unknown',
+                'type': 'unknown',
                 'confidence': 0.0
             }
 
@@ -338,8 +334,7 @@ class ALPRProcessor:
                 },
                 'frame_count': len(frame_bytes_list),
                 'vehicle_color': primary_vehicle['color'],
-                'vehicle_make': primary_vehicle['make'],
-                'vehicle_model': primary_vehicle['model'],
+                'vehicle_type': primary_vehicle['type'],
                 'vehicle_confidence': primary_vehicle['confidence'],
                 'vehicles': vehicles_data  # List of all detected vehicles
             }]
@@ -396,10 +391,9 @@ class ALPRProcessor:
                         'bbox': vehicle_bbox,
                         'crop': vehicle_crop.copy(),
                         'det_conf': det_conf,
-                        'color': vehicle_attrs['color'],
-                        'make': vehicle_attrs['make'],
-                        'model': vehicle_attrs['model'],
-                        'confidence': vehicle_attrs['confidence']
+                        'color': vehicle_attrs.get('color', 'unknown'),
+                        'type': vehicle_attrs.get('type', 'unknown'),
+                        'confidence': vehicle_attrs.get('confidence', 0.0)
                     }
                     
                     if matched_track:
@@ -602,16 +596,15 @@ class ALPRProcessor:
                         'bbox': vehicle_bbox,
                         'crop': vehicle_crop.copy(),
                         'det_conf': det_conf,
-                        'color': vehicle_attrs['color'],
-                        'make': vehicle_attrs['make'],
-                        'model': vehicle_attrs['model'],
-                        'confidence': vehicle_attrs['confidence']
+                        'color': vehicle_attrs.get('color', 'unknown'),
+                        'type': vehicle_attrs.get('type', 'unknown'),
+                        'confidence': vehicle_attrs.get('confidence', 0.0)
                     }
                     
                     if matched_track:
                         matched_track['detections'].append(detection)
-                        if vehicle_attrs['confidence'] > matched_track['best_confidence']:
-                            matched_track['best_confidence'] = vehicle_attrs['confidence']
+                        if vehicle_attrs.get('confidence', 0.0) > matched_track['best_confidence']:
+                            matched_track['best_confidence'] = vehicle_attrs.get('confidence', 0.0)
                             matched_track['best_detection'] = detection
                     else:
                         vehicle_tracks.append({
@@ -638,20 +631,18 @@ class ALPRProcessor:
                             'bbox': vehicle_bbox,
                             'crop': vehicle_crop.copy(),
                             'det_conf': det_conf,
-                            'color': vehicle_attrs['color'],
-                            'make': vehicle_attrs['make'],
-                            'model': vehicle_attrs['model'],
-                            'confidence': vehicle_attrs['confidence']
+                            'color': vehicle_attrs.get('color', 'unknown'),
+                            'type': vehicle_attrs.get('type', 'unknown'),
+                            'confidence': vehicle_attrs.get('confidence', 0.0)
                         }],
-                        'best_confidence': vehicle_attrs['confidence'],
+                        'best_confidence': vehicle_attrs.get('confidence', 0.0),
                         'best_detection': {
                             'bbox': vehicle_bbox,
                             'crop': vehicle_crop.copy(),
                             'det_conf': det_conf,
-                            'color': vehicle_attrs['color'],
-                            'make': vehicle_attrs['make'],
-                            'model': vehicle_attrs['model'],
-                            'confidence': vehicle_attrs['confidence']
+                            'color': vehicle_attrs.get('color', 'unknown'),
+                            'type': vehicle_attrs.get('type', 'unknown'),
+                            'confidence': vehicle_attrs.get('confidence', 0.0)
                         }
                     })
             else:
@@ -662,10 +653,9 @@ class ALPRProcessor:
                     'crop_path': None,
                     'bbox': None,
                     'detection_confidence': 0.0,
-                    'color': vehicle_attrs['color'],
-                    'make': vehicle_attrs['make'],
-                    'model': vehicle_attrs['model'],
-                    'confidence': vehicle_attrs['confidence'],
+                    'color': vehicle_attrs.get('color', 'unknown'),
+                    'type': vehicle_attrs.get('type', 'unknown'),
+                    'confidence': vehicle_attrs.get('confidence', 0.0),
                     'sample_count': 1
                 }]
         
@@ -678,7 +668,7 @@ class ALPRProcessor:
             aggregated = self._aggregate_vehicle_results(track['detections'])
             best_det = track['best_detection']
             
-            logger.info(f"Vehicle {idx}: {len(track['detections'])} samples, {aggregated['color']} {aggregated['make']} {aggregated['model']}")
+            logger.info(f"Vehicle {idx}: {len(track['detections'])} samples, {aggregated['color']} {aggregated['type']}")
             
             # Save best crop from this track
             vehicle_crop_filename = f"{timestamp}_{plate_text}_vehicle_{idx}.jpg"
@@ -690,8 +680,7 @@ class ALPRProcessor:
                 'bbox': best_det['bbox'],
                 'detection_confidence': best_det['det_conf'],
                 'color': aggregated['color'],
-                'make': aggregated['make'],
-                'model': aggregated['model'],
+                'type': aggregated['type'],
                 'confidence': aggregated['confidence'],
                 'sample_count': len(track['detections'])
             })
@@ -737,50 +726,43 @@ class ALPRProcessor:
         Aggregate vehicle attributes from multiple detections using voting and confidence.
         
         Args:
-            detections: List of vehicle detection dicts with color, make, model, confidence
+            detections: List of vehicle detection dicts with color, type, confidence
             
         Returns:
-            Dict with aggregated color, make, model, and average confidence
+            Dict with aggregated color, type, and average confidence
         """
         if not detections:
             return {
                 'color': 'unknown',
-                'make': 'unknown',
-                'model': 'unknown',
+                'type': 'unknown',
                 'confidence': 0.0
             }
         
         # Count occurrences and track confidences
         colors = {}
-        makes = {}
-        models = {}
+        types = {}
         confidences = []
         
         for det in detections:
-            color = det['color']
-            make = det['make']
-            model = det['model']
-            conf = det['confidence']
+            color = det.get('color', 'unknown')
+            vtype = det.get('type', 'unknown')
+            conf = det.get('confidence', 0.0)
             
             if color != 'unknown':
                 colors[color] = colors.get(color, 0) + 1
-            if make != 'unknown':
-                makes[make] = makes.get(make, 0) + 1
-            if model != 'unknown':
-                models[model] = models.get(model, 0) + 1
+            if vtype != 'unknown':
+                types[vtype] = types.get(vtype, 0) + 1
             
             confidences.append(conf)
         
         # Select most common value (voting)
         best_color = max(colors.items(), key=lambda x: x[1])[0] if colors else 'unknown'
-        best_make = max(makes.items(), key=lambda x: x[1])[0] if makes else 'unknown'
-        best_model = max(models.items(), key=lambda x: x[1])[0] if models else 'unknown'
+        best_type = max(types.items(), key=lambda x: x[1])[0] if types else 'unknown'
         avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
         
         return {
             'color': best_color,
-            'make': best_make,
-            'model': best_model,
+            'type': best_type,
             'confidence': avg_confidence
         }
 
@@ -827,7 +809,7 @@ class ALPRProcessor:
                         # Recognize vehicle attributes
                         vehicle_attrs = self.vehicle_recognizer.recognize_vehicle(vehicle_crop)
                         
-                        if vehicle_attrs['color'] == 'unknown' and vehicle_attrs['make'] == 'unknown':
+                        if vehicle_attrs.get('color', 'unknown') == 'unknown' and vehicle_attrs.get('type', 'unknown') == 'unknown':
                             continue
                         
                         # Try to match with existing tracks using IoU
@@ -847,25 +829,24 @@ class ALPRProcessor:
                             'bbox': vehicle_bbox,
                             'crop': vehicle_crop.copy(),
                             'det_conf': det_conf,
-                            'color': vehicle_attrs['color'],
-                            'make': vehicle_attrs['make'],
-                            'model': vehicle_attrs['model'],
-                            'confidence': vehicle_attrs['confidence']
+                            'color': vehicle_attrs.get('color', 'unknown'),
+                            'type': vehicle_attrs.get('type', 'unknown'),
+                            'confidence': vehicle_attrs.get('confidence', 0.0)
                         }
                         
                         if matched_track:
                             # Add to existing track
                             matched_track['detections'].append(detection)
                             # Update with highest confidence detection
-                            if vehicle_attrs['confidence'] > matched_track['best_confidence']:
-                                matched_track['best_confidence'] = vehicle_attrs['confidence']
+                            if vehicle_attrs.get('confidence', 0.0) > matched_track['best_confidence']:
+                                matched_track['best_confidence'] = vehicle_attrs.get('confidence', 0.0)
                                 matched_track['best_detection'] = detection
                                 matched_track['best_frame_img'] = img.copy()
                         else:
                             # Create new track
                             vehicle_tracks.append({
                                 'detections': [detection],
-                                'best_confidence': vehicle_attrs['confidence'],
+                                'best_confidence': vehicle_attrs.get('confidence', 0.0),
                                 'best_detection': detection,
                                 'best_frame_img': img.copy()
                             })
@@ -890,10 +871,10 @@ class ALPRProcessor:
                 aggregated = self._aggregate_vehicle_results(track['detections'])
                 best_det = track['best_detection']
                 
-                logger.info(f"Vehicle {idx}: {len(track['detections'])} detections, aggregated as {aggregated['color']} {aggregated['make']} {aggregated['model']}")
+                logger.info(f"Vehicle {idx}: {len(track['detections'])} detections, aggregated as {aggregated['color']} {aggregated['type']}")
                 
                 # Save best crop from this track
-                vehicle_desc = f"{aggregated['color']}_{aggregated['make']}"
+                vehicle_desc = f"{aggregated['color']}_{aggregated['type']}"
                 vehicle_crop_filename = f"{timestamp}_NO_PLATE_{vehicle_desc}_vehicle_{idx}.jpg"
                 vehicle_crop_path = save_dir / "images" / vehicle_crop_filename
                 vehicle_crop_path.parent.mkdir(parents=True, exist_ok=True)
@@ -905,8 +886,7 @@ class ALPRProcessor:
                     'bbox': best_det['bbox'],
                     'detection_confidence': best_det['det_conf'],
                     'color': aggregated['color'],
-                    'make': aggregated['make'],
-                    'model': aggregated['model'],
+                    'type': aggregated['type'],
                     'confidence': aggregated['confidence'],
                     'sample_count': len(track['detections'])
                 })
@@ -922,7 +902,7 @@ class ALPRProcessor:
             
             # Save full image with vehicle-only naming (from best frame)
             primary_vehicle = vehicles_data[0]
-            vehicle_desc = f"{primary_vehicle['color']}_{primary_vehicle['make']}"
+            vehicle_desc = f"{primary_vehicle['color']}_{primary_vehicle['type']}"
             image_filename = f"{timestamp}_NO_PLATE_{vehicle_desc}.jpg"
             image_path = save_dir / "images" / image_filename
             image_path.parent.mkdir(parents=True, exist_ok=True)
@@ -937,8 +917,7 @@ class ALPRProcessor:
                 'box_coordinates': {},
                 'frame_count': len(frame_bytes_list),
                 'vehicle_color': primary_vehicle['color'],
-                'vehicle_make': primary_vehicle['make'],
-                'vehicle_model': primary_vehicle['model'],
+                'vehicle_type': primary_vehicle['type'],
                 'vehicle_confidence': primary_vehicle['confidence'],
                 'vehicles': vehicles_data  # List of all detected vehicles
             }

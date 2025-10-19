@@ -398,19 +398,18 @@ class VehicleRecognizer:
     
     def recognize_vehicle(self, image: np.ndarray) -> Dict[str, str]:
         """
-        Recognize vehicle attributes from image with enhanced confidence handling.
+        Recognize vehicle attributes from image: color and type (sedan, suv, etc).
         
         Args:
             image: OpenCV image (BGR format) of the vehicle
             
         Returns:
-            Dict with color, make, model, and confidence information
+            Dict with color, type, and confidence information
         """
         if not self.enabled:
             return {
                 'color': 'unknown',
-                'make': 'unknown',
-                'model': 'unknown',
+                'type': 'unknown',
                 'confidence': 0.0
             }
         
@@ -418,20 +417,12 @@ class VehicleRecognizer:
             # Detect color using enhanced HSV analysis with lighting normalization
             color = self._detect_color_enhanced(image)
             
-            # Use deep learning for make/model recognition with confidence
-            make, model, confidence = self._classify_vehicle_with_confidence(image)
-            
-            # Only return make/model if confidence is above threshold
-            min_confidence = getattr(self.config, 'vehicle_min_confidence', 0.4)
-            if confidence < min_confidence:
-                logger.debug(f"Vehicle classification confidence {confidence:.3f} below threshold {min_confidence}")
-                make, model = 'unknown', 'unknown'
-                confidence = 0.0
+            # Detect vehicle type (sedan, suv, pickup, truck, etc)
+            vehicle_type, confidence = self._detect_vehicle_type(image)
             
             return {
                 'color': color,
-                'make': make,
-                'model': model,
+                'type': vehicle_type,
                 'confidence': confidence
             }
             
@@ -439,8 +430,7 @@ class VehicleRecognizer:
             logger.error(f"Error recognizing vehicle: {e}")
             return {
                 'color': 'unknown',
-                'make': 'unknown',
-                'model': 'unknown',
+                'type': 'unknown',
                 'confidence': 0.0
             }
     
@@ -738,6 +728,183 @@ class VehicleRecognizer:
             logger.error(f"Error in region color detection: {e}")
             return 'unknown'
     
+    def _detect_vehicle_type(self, image: np.ndarray) -> tuple[str, float]:
+        """
+        Detect vehicle type (sedan, suv, pickup, truck, van, etc) using aspect ratio and shape analysis.
+        
+        Args:
+            image: OpenCV image (BGR format) - should be cropped to vehicle
+            
+        Returns:
+            Tuple of (vehicle_type, confidence)
+        """
+        try:
+            height, width = image.shape[:2]
+            
+            # Calculate aspect ratio
+            aspect_ratio = width / height if height > 0 else 0
+            
+            # Analyze vehicle profile using YOLO detection classes
+            # The YOLO model already gives us vehicle class information
+            # We can use that or do additional shape analysis
+            
+            # For now, let's use a hybrid approach:
+            # 1. Check YOLO class if available (from self.yolo_model)
+            # 2. Fall back to aspect ratio and shape analysis
+            
+            vehicle_type = self._classify_by_yolo_and_shape(image, aspect_ratio)
+            
+            # Confidence based on aspect ratio clarity
+            # Clear ratios give higher confidence
+            if aspect_ratio < 0.5 or aspect_ratio > 3.0:
+                confidence = 0.95  # Very clear (extreme ratios)
+            elif aspect_ratio < 1.2 or aspect_ratio > 2.2:
+                confidence = 0.85  # Clear
+            else:
+                confidence = 0.70  # Moderate (middle range is ambiguous)
+            
+            logger.debug(f"Vehicle type: {vehicle_type} (aspect ratio: {aspect_ratio:.2f}, conf: {confidence:.2f})")
+            return vehicle_type, confidence
+            
+        except Exception as e:
+            logger.error(f"Error detecting vehicle type: {e}")
+            return 'unknown', 0.0
+    
+    def _classify_by_yolo_and_shape(self, image: np.ndarray, aspect_ratio: float) -> str:
+        """
+        Classify vehicle type using YOLO detection and shape analysis.
+        
+        Args:
+            image: OpenCV image (BGR format)
+            aspect_ratio: Width/height ratio of vehicle crop
+            
+        Returns:
+            Vehicle type as string
+        """
+        try:
+            # Run YOLO on the crop to get detailed class
+            if self.yolo_model is not None:
+                results = self.yolo_model(image, verbose=False)
+                
+                for result in results:
+                    boxes = result.boxes
+                    for box in boxes:
+                        cls = int(box.cls[0])
+                        conf = float(box.conf[0])
+                        
+                        if conf > 0.3:  # Reasonable confidence
+                            # COCO dataset classes:
+                            if cls == 2:  # car
+                                # Distinguish sedan vs hatchback vs coupe by aspect ratio
+                                if aspect_ratio > 1.8:
+                                    logger.debug(f"Detection method: YOLO (car) + aspect ratio → sedan")
+                                    return 'sedan'
+                                elif aspect_ratio > 1.5:
+                                    logger.debug(f"Detection method: YOLO (car) + aspect ratio → hatchback")
+                                    return 'hatchback'
+                                else:
+                                    logger.debug(f"Detection method: YOLO (car) + aspect ratio → coupe")
+                                    return 'coupe'
+                            elif cls == 7:  # truck
+                                # Check if it's a pickup or semi
+                                if aspect_ratio > 2.0:
+                                    logger.debug(f"Detection method: YOLO (truck) + aspect ratio → truck")
+                                    return 'truck'
+                                else:
+                                    logger.debug(f"Detection method: YOLO (truck) + aspect ratio → pickup")
+                                    return 'pickup'
+                            elif cls == 5:  # bus
+                                logger.debug(f"Detection method: YOLO (bus)")
+                                return 'bus'
+                            elif cls == 3:  # motorcycle
+                                logger.debug(f"Detection method: YOLO (motorcycle)")
+                                return 'motorcycle'
+            
+            # Fallback to shape-based classification
+            logger.debug(f"Detection method: Shape analysis (YOLO not available or no match)")
+            return self._classify_by_shape(image, aspect_ratio)
+            
+        except Exception as e:
+            logger.warning(f"YOLO classification failed, using shape analysis: {e}")
+            return self._classify_by_shape(image, aspect_ratio)
+    
+    def _classify_by_shape(self, image: np.ndarray, aspect_ratio: float) -> str:
+        """
+        Classify vehicle type based on shape analysis (aspect ratio and proportions).
+        
+        Args:
+            image: OpenCV image (BGR format)
+            aspect_ratio: Width/height ratio
+            
+        Returns:
+            Vehicle type as string
+        """
+        try:
+            height, width = image.shape[:2]
+            
+            # Analyze vertical profile (how tall is the vehicle relative to width)
+            # This helps distinguish SUVs/vans from sedans/trucks
+            
+            # Very wide and low: likely sedan/sports car
+            if aspect_ratio > 2.2:
+                logger.debug(f"Shape analysis: Very wide aspect ratio ({aspect_ratio:.2f}) → sedan")
+                return 'sedan'
+            
+            # Wide and medium height: sedan/wagon
+            elif aspect_ratio > 1.8:
+                # Check upper half fullness to distinguish sedan vs wagon
+                upper_half = image[0:height//2, :]
+                lower_half = image[height//2:, :]
+                
+                # Simple brightness comparison (vehicles are usually darker on top)
+                upper_brightness = np.mean(upper_half)
+                lower_brightness = np.mean(lower_half)
+                
+                if upper_brightness < lower_brightness * 0.8:
+                    logger.debug(f"Shape analysis: Wide ({aspect_ratio:.2f}) + darker top → sedan")
+                    return 'sedan'
+                else:
+                    logger.debug(f"Shape analysis: Wide ({aspect_ratio:.2f}) + uniform brightness → wagon")
+                    return 'wagon'
+            
+            # Medium aspect ratio: could be SUV, pickup, van
+            elif aspect_ratio > 1.4:
+                # Analyze the rear portion to distinguish pickup trucks
+                # Pickups usually have an open bed (brighter/different color in back third)
+                rear_third = image[:, int(width * 0.66):]
+                front_two_thirds = image[:, :int(width * 0.66)]
+                
+                rear_std = np.std(rear_third)
+                front_std = np.std(front_two_thirds)
+                
+                # Open pickup bed has more variation
+                if rear_std > front_std * 1.3:
+                    logger.debug(f"Shape analysis: Medium ({aspect_ratio:.2f}) + bed variation → pickup")
+                    return 'pickup'
+                
+                # Otherwise likely SUV or van
+                # Vans are usually taller and boxier
+                if aspect_ratio < 1.6:
+                    logger.debug(f"Shape analysis: Medium-square ({aspect_ratio:.2f}) → van")
+                    return 'van'
+                else:
+                    logger.debug(f"Shape analysis: Medium ({aspect_ratio:.2f}) → suv")
+                    return 'suv'
+            
+            # Square-ish: van or box truck
+            elif aspect_ratio > 1.0:
+                logger.debug(f"Shape analysis: Square-ish ({aspect_ratio:.2f}) → van")
+                return 'van'
+            
+            # Tall and narrow: could be motorcycle, bus front view, or unusual angle
+            else:
+                logger.debug(f"Shape analysis: Tall/narrow ({aspect_ratio:.2f}) → other")
+                return 'other'
+                
+        except Exception as e:
+            logger.error(f"Shape classification failed: {e}")
+            return 'unknown'
+    
     def _classify_vehicle(self, image: np.ndarray) -> tuple[str, str]:
         """
         Classify vehicle make and model using CompCars fine-tuned model.
@@ -799,7 +966,7 @@ class VehicleRecognizer:
     
     def _classify_vehicle_with_confidence(self, image: np.ndarray) -> tuple[str, str, float]:
         """
-        Classify vehicle make and model with confidence score.
+        Classify vehicle make and model with confidence score using test-time augmentation.
         
         Args:
             image: OpenCV image (BGR format)
@@ -811,6 +978,24 @@ class VehicleRecognizer:
         if self.classifier_model is None or self.class_labels is None:
             return 'unknown', 'unknown', 0.0
         
+        # Use test-time augmentation for better accuracy
+        use_tta = getattr(self.config, 'vehicle_use_tta', True)
+        
+        if use_tta:
+            return self._classify_with_tta(image)
+        else:
+            return self._classify_single_image(image)
+    
+    def _classify_single_image(self, image: np.ndarray) -> tuple[str, str, float]:
+        """
+        Classify a single image without augmentation.
+        
+        Args:
+            image: OpenCV image (BGR format)
+            
+        Returns:
+            Tuple of (make, model, confidence)
+        """
         try:
             # Enhance image quality for better classification
             enhanced_image = self._enhance_vehicle_crop(image)
@@ -873,6 +1058,112 @@ class VehicleRecognizer:
         except Exception as e:
             logger.error(f"Error classifying vehicle with confidence: {e}")
             return 'unknown', 'unknown', 0.0
+    
+    def _classify_with_tta(self, image: np.ndarray) -> tuple[str, str, float]:
+        """
+        Classify vehicle using Test-Time Augmentation (TTA) for improved accuracy.
+        Runs classification on multiple augmented versions and aggregates results.
+        
+        Args:
+            image: OpenCV image (BGR format)
+            
+        Returns:
+            Tuple of (make, model, confidence)
+        """
+        try:
+            logger.debug("Using Test-Time Augmentation for classification")
+            
+            # Collect predictions from multiple augmentations
+            predictions = []
+            
+            # 1. Original enhanced image
+            pred = self._classify_single_image(image)
+            if pred[0] != 'unknown':
+                predictions.append(pred)
+            
+            # 2. Slight brightness adjustments (helps with lighting variations)
+            for brightness_factor in [0.85, 1.15]:
+                adjusted = cv2.convertScaleAbs(image, alpha=brightness_factor, beta=0)
+                pred = self._classify_single_image(adjusted)
+                if pred[0] != 'unknown':
+                    predictions.append(pred)
+            
+            # 3. Horizontal flip (helps with left vs right angles)
+            flipped = cv2.flip(image, 1)
+            pred = self._classify_single_image(flipped)
+            if pred[0] != 'unknown':
+                predictions.append(pred)
+            
+            # 4. Slight contrast adjustment
+            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+            l_enhanced = clahe.apply(l)
+            enhanced = cv2.cvtColor(cv2.merge([l_enhanced, a, b]), cv2.COLOR_LAB2BGR)
+            pred = self._classify_single_image(enhanced)
+            if pred[0] != 'unknown':
+                predictions.append(pred)
+            
+            # If no valid predictions, return unknown
+            if not predictions:
+                logger.warning("TTA: No valid predictions from any augmentation")
+                return 'unknown', 'unknown', 0.0
+            
+            # Aggregate predictions using weighted voting
+            return self._aggregate_predictions(predictions)
+            
+        except Exception as e:
+            logger.error(f"Error in TTA classification: {e}")
+            # Fallback to single image classification
+            return self._classify_single_image(image)
+    
+    def _aggregate_predictions(self, predictions: list) -> tuple[str, str, float]:
+        """
+        Aggregate multiple predictions using weighted voting.
+        
+        Args:
+            predictions: List of (make, model, confidence) tuples
+            
+        Returns:
+            Aggregated (make, model, confidence)
+        """
+        try:
+            if not predictions:
+                return 'unknown', 'unknown', 0.0
+            
+            # Create weighted votes for each make/model combination
+            votes = {}
+            for make, model, conf in predictions:
+                key = f"{make}|{model}"
+                if key not in votes:
+                    votes[key] = {'count': 0, 'total_conf': 0.0, 'make': make, 'model': model}
+                votes[key]['count'] += 1
+                votes[key]['total_conf'] += conf
+            
+            # Calculate score: count * average_confidence
+            best_score = 0
+            best_result = None
+            
+            for key, vote_data in votes.items():
+                avg_conf = vote_data['total_conf'] / vote_data['count']
+                score = vote_data['count'] * avg_conf
+                
+                if score > best_score:
+                    best_score = score
+                    best_result = (vote_data['make'], vote_data['model'], avg_conf)
+            
+            if best_result:
+                make, model, conf = best_result
+                vote_count = votes[f"{make}|{model}"]['count']
+                logger.debug(f"TTA Result: {make} {model} (conf: {conf:.3f}, votes: {vote_count}/{len(predictions)})")
+                return best_result
+            
+            # Fallback to first prediction
+            return predictions[0]
+            
+        except Exception as e:
+            logger.error(f"Error aggregating predictions: {e}")
+            return predictions[0] if predictions else ('unknown', 'unknown', 0.0)
     
     def _enhance_vehicle_crop(self, image: np.ndarray) -> np.ndarray:
         """

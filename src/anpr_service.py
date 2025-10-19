@@ -287,8 +287,7 @@ class ANPRService:
                         f"Plate={result['plate_number']} "
                         f"(conf: {result['confidence']:.2%}), "
                         f"Vehicle={result.get('vehicle_color', 'unknown')} "
-                        f"{result.get('vehicle_make', 'unknown')} "
-                        f"{result.get('vehicle_model', 'unknown')}"
+                        f"{result.get('vehicle_type', 'unknown')}"
                     )
 
                     # Save to database (one entry per vehicle)
@@ -322,8 +321,7 @@ class ANPRService:
                             plate_crop_path,
                             vehicle_crop_path,
                             result.get('vehicle_color'),
-                            result.get('vehicle_make'),
-                            result.get('vehicle_model'),
+                            result.get('vehicle_type'),
                             result.get('vehicle_confidence')
                         )
                     else:

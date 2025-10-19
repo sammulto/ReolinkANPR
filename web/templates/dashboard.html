@@ -276,28 +276,35 @@
 
     function formatVehicleInfo(event) {
         const color = event.vehicle_color || 'unknown';
-        const make = event.vehicle_make || 'unknown';
-        const model = event.vehicle_model || 'unknown';
+        const type = event.vehicle_type || 'unknown';
+        const confidence = event.vehicle_confidence;
         
-        if (color === 'unknown' && make === 'unknown' && model === 'unknown') {
+        if (color === 'unknown' && type === 'unknown') {
             return '<span class="text-muted">Not available</span>';
         }
         
         // Capitalize first letter
         const capitalize = (str) => str.charAt(0).toUpperCase() + str.slice(1);
         
-        let info = [];
+        let html = '<div>';
+        
+        // Color badge
         if (color !== 'unknown') {
-            info.push(`<span class="badge bg-info text-dark">${capitalize(color)}</span>`);
-        }
-        if (make !== 'unknown') {
-            info.push(`<span class="badge bg-secondary">${capitalize(make)}</span>`);
-        }
-        if (model !== 'unknown') {
-            info.push(`<span class="badge bg-secondary">${capitalize(model)}</span>`);
+            html += `<span class="badge bg-info text-dark me-1">${capitalize(color)}</span>`;
         }
         
-        return '<div>' + info.join(' ') + '</div>';
+        // Type badge
+        if (type !== 'unknown') {
+            html += `<span class="badge bg-primary">${capitalize(type)}</span>`;
+        }
+        
+        // Confidence badge (optional)
+        if (confidence && confidence > 0) {
+            html += `<div class="mt-1"><small class="text-muted">Conf: </small><span class="badge bg-success">${(confidence * 100).toFixed(0)}%</span></div>`;
+        }
+        
+        html += '</div>';
+        return html;
     }
 </script>
 {% endblock %}

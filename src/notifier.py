@@ -49,8 +49,7 @@ class Notifier:
         plate_crop_path: Optional[str] = None,
         vehicle_crop_path: Optional[str] = None,
         vehicle_color: Optional[str] = None,
-        vehicle_make: Optional[str] = None,
-        vehicle_model: Optional[str] = None,
+        vehicle_type: Optional[str] = None,
         vehicle_confidence: Optional[float] = None
     ):
         """Send notification when a plate is detected.
@@ -62,8 +61,7 @@ class Notifier:
             plate_crop_path: Path to cropped plate image
             vehicle_crop_path: Path to cropped vehicle image (preferred for Telegram)
             vehicle_color: Detected vehicle color
-            vehicle_make: Detected vehicle make
-            vehicle_model: Detected vehicle model
+            vehicle_type: Detected vehicle type (sedan, suv, etc)
             vehicle_confidence: Vehicle classification confidence (0-1)
         """
         logger.debug(f"send_detection called: enabled={self.enabled}, plate={plate_number}")
@@ -75,11 +73,11 @@ class Notifier:
         # Build message with vehicle info
         if plate_number == 'NO_PLATE' or 'NO_PLATE' in plate_number:
             # Vehicle-only detection
-            vehicle_desc = self._format_vehicle_description(vehicle_color, vehicle_make, vehicle_model, vehicle_confidence)
+            vehicle_desc = self._format_vehicle_description(vehicle_color, vehicle_type, vehicle_confidence)
             message = f"Vehicle Detected (No Plate)\n{vehicle_desc}"
         else:
             # Normal plate detection with vehicle info
-            vehicle_desc = self._format_vehicle_description(vehicle_color, vehicle_make, vehicle_model, vehicle_confidence)
+            vehicle_desc = self._format_vehicle_description(vehicle_color, vehicle_type, vehicle_confidence)
             message = f"Plate Detected: {plate_number}\nPlate Conf: {confidence:.1%}"
             if vehicle_desc:
                 message += f"\n{vehicle_desc}"
@@ -89,7 +87,7 @@ class Notifier:
             logger.debug("Sending to Home Assistant...")
             await self._send_to_home_assistant(
                 plate_number, confidence, image_path,
-                vehicle_color, vehicle_make, vehicle_model, vehicle_confidence
+                vehicle_color, vehicle_type, vehicle_confidence
             )
         
         # Send to Telegram
@@ -104,8 +102,7 @@ class Notifier:
     def _format_vehicle_description(
         self, 
         color: Optional[str], 
-        make: Optional[str], 
-        model: Optional[str],
+        vehicle_type: Optional[str], 
         confidence: Optional[float] = None
     ) -> str:
         """Format vehicle description for notifications."""
@@ -114,11 +111,8 @@ class Notifier:
         if color and color != 'unknown':
             parts.append(f"{color.capitalize()}")
         
-        if make and make != 'unknown':
-            parts.append(f"{make.capitalize()}")
-        
-        if model and model != 'unknown':
-            parts.append(f"{model.capitalize()}")
+        if vehicle_type and vehicle_type != 'unknown':
+            parts.append(f"{vehicle_type.capitalize()}")
         
         description = " | ".join(parts) if parts else ""
         
@@ -130,8 +124,7 @@ class Notifier:
         confidence: float, 
         image_path: Optional[str],
         vehicle_color: Optional[str] = None,
-        vehicle_make: Optional[str] = None,
-        vehicle_model: Optional[str] = None,
+        vehicle_type: Optional[str] = None,
         vehicle_confidence: Optional[float] = None
     ):
         """Send webhook to Home Assistant."""
@@ -142,13 +135,12 @@ class Notifier:
                     'plate_confidence': confidence,
                     'image_path': image_path,
                     'vehicle_color': vehicle_color or 'unknown',
-                    'vehicle_make': vehicle_make or 'unknown',
-                    'vehicle_model': vehicle_model or 'unknown',
+                    'vehicle_type': vehicle_type or 'unknown',
                     'vehicle_confidence': vehicle_confidence if vehicle_confidence is not None else 0.0
                 }
                 async with session.post(self.ha_webhook, json=data, timeout=5) as response:
                     if response.status == 200:
-                        vehicle_info = f"{vehicle_color} {vehicle_make} {vehicle_model}".strip()
+                        vehicle_info = f"{vehicle_color} {vehicle_type}".strip()
                         logger.info(f"Sent to Home Assistant: {plate_number} ({vehicle_info})")
                     else:
                         logger.warning(f"Home Assistant returned status {response.status}")
